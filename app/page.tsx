@@ -51,6 +51,15 @@ function quantile(values: number[], q: number) {
   return sorted[Math.floor((sorted.length - 1) * q)] ?? 0;
 }
 
+function niceTickStep(range: number, targetIntervals = 4) {
+  const rough = Math.abs(range) / targetIntervals;
+  if (!Number.isFinite(rough) || rough === 0) return 1;
+  const power = 10 ** Math.floor(Math.log10(rough));
+  const fraction = rough / power;
+  const niceFraction = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
+  return niceFraction * power;
+}
+
 function binEdges(wavelengths: number[]) {
   if (wavelengths.length < 2) return [];
   const edges = new Array(wavelengths.length + 1);
@@ -145,9 +154,18 @@ function prepareSpectrum(
 
 function plotBounds(spectrum: PreparedSpectrum) {
   const low = quantile(spectrum.f, 0.01);
-  const high = quantile(spectrum.f, 0.995);
+  const high = Math.max(quantile(spectrum.f, 0.995), quantile(spectrum.smooth, 1));
   const padding = Math.max((high - low) * 0.08, 0.01);
-  return { yMin: low - padding, yMax: high + padding };
+  const paddedMin = low - padding;
+  const paddedMax = high + padding;
+  const tickStep = niceTickStep(paddedMax - paddedMin);
+  const yMin = Math.floor(paddedMin / tickStep) * tickStep;
+  const yMax = Math.ceil(paddedMax / tickStep) * tickStep;
+  const yTicks = Array.from(
+    { length: Math.round((yMax - yMin) / tickStep) + 1 },
+    (_, index) => yMin + index * tickStep,
+  );
+  return { yMin, yMax, yTicks };
 }
 
 function pathForSeries(
@@ -192,6 +210,27 @@ function formatFlux(value: number) {
   return value.toFixed(Math.abs(value) < 10 ? 1 : 0);
 }
 
+function truncateFixed(value: number, decimalPlaces: number) {
+  const factor = 10 ** decimalPlaces;
+  return (Math.floor(value * factor + 1e-8) / factor).toFixed(decimalPlaces);
+}
+
+function sdssDesignation(ra: number, dec: number) {
+  const raHours = (((ra % 360) + 360) % 360) / 15;
+  const raHour = Math.floor(raHours);
+  const raMinutesFloat = (raHours - raHour) * 60;
+  const raMinute = Math.floor(raMinutesFloat);
+  const raSecond = (raMinutesFloat - raMinute) * 60;
+
+  const absoluteDec = Math.abs(dec);
+  const decDegree = Math.floor(absoluteDec);
+  const decMinutesFloat = (absoluteDec - decDegree) * 60;
+  const decMinute = Math.floor(decMinutesFloat);
+  const decSecond = (decMinutesFloat - decMinute) * 60;
+
+  return `SDSS J${String(raHour).padStart(2, "0")}${String(raMinute).padStart(2, "0")}${truncateFixed(raSecond, 2).padStart(5, "0")}${dec >= 0 ? "+" : "-"}${String(decDegree).padStart(2, "0")}${String(decMinute).padStart(2, "0")}${truncateFixed(decSecond, 1).padStart(4, "0")}`;
+}
+
 function SpectrumPlot({
   spectrum,
   frame,
@@ -215,19 +254,18 @@ function SpectrumPlot({
     return <div className="plot-loading">Loading calibrated flux…</div>;
   }
   const prepared = prepareSpectrum(spectrum, frame, z);
-  const { yMin, yMax } = plotBounds(prepared);
+  const { yMin, yMax, yTicks } = plotBounds(prepared);
   const rawPath = pathForSeries(prepared.w, prepared.f, yMin, yMax);
   const smoothPath = pathForSeries(prepared.w, prepared.smooth, yMin, yMax);
   const min = prepared.w[0];
   const max = prepared.w[prepared.w.length - 1];
   const xTicks = Array.from({ length: 7 }, (_, index) => min + ((max - min) * index) / 6);
-  const yTicks = Array.from({ length: 5 }, (_, index) => yMin + ((yMax - yMin) * index) / 4);
   return (
     <div className="science-plot">
       <svg viewBox="0 0 1100 650" role="img" aria-labelledby="spectrum-title spectrum-description">
         <title id="spectrum-title">{`${survey.toUpperCase()} ${frame}-frame spectrum for ${objectLabel}`}</title>
         <desc id="spectrum-description">
-          The light grey line is the rebinned measured flux density. The dark line is a Gaussian-smoothed guide. Spectral features are labelled at their redshift-aware wavelengths.
+          Spectrum with labelled spectral features and numerical wavelength and flux-density axes.
         </desc>
         <defs>
           <clipPath id="spectrum-clip"><rect x="95" y="105" width="970" height="460" /></clipPath>
@@ -237,10 +275,7 @@ function SpectrumPlot({
           Survey: {survey.toUpperCase()} · Object: {objectLabel}
         </text>
         <text x="95" y="55" className="plot-header">
-          z = {z.toFixed(5)} · {frame === "observed" ? "observed-frame calibrated flux density" : "flux-conserving rest-frame rebin"}
-        </text>
-        <text x="95" y="78" className="plot-subheader">
-          Light: rebinned data · Dark: Gaussian-smoothed guide
+          z = {z.toFixed(5)} · {frame === "observed" ? "observed frame" : "rest frame"}
         </text>
         {xTicks.map((tick) => (
           <g key={`x-${tick}`}>
@@ -298,7 +333,7 @@ function SpectrumPlot({
           {frame === "observed" ? "Observed wavelength" : "Rest-frame wavelength"} (Å)
         </text>
         <text x="24" y="335" textAnchor="middle" transform="rotate(-90 24 335)" className="plot-axis-label">
-          {frame === "rest" ? "(1 + z) fλ" : "fλ"} (10⁻¹⁷ erg s⁻¹ cm⁻² Å⁻¹)
+          Flux density (10⁻¹⁷ erg s⁻¹ cm⁻² Å⁻¹)
         </text>
       </svg>
     </div>
@@ -470,7 +505,7 @@ export default function Home() {
   const [groupId, setGroupId] = useState<string>("star-forming");
   const [index, setIndex] = useState(0);
   const [frame, setFrame] = useState<"observed" | "rest">("observed");
-  const [lineIndex, setLineIndex] = useState(15);
+  const [lineIndex, setLineIndex] = useState(16);
   const [spectrum, setSpectrum] = useState<Spectrum | null>(null);
   const [revealed, setRevealed] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -545,8 +580,12 @@ export default function Home() {
       : (object as DesiObject).imageSource ?? "DES DR2 / fallback imaging";
   const objectLabel =
     survey === "sdss"
-      ? `${(object as SdssObject).plate}–${(object as SdssObject).mjd}–${String((object as SdssObject).fiber).padStart(4, "0")}`
+      ? sdssDesignation(object.ra, object.dec)
       : `TARGETID ${(object as DesiObject).targetid}`;
+  const spectrumLabel =
+    survey === "sdss"
+      ? `spec-${String((object as SdssObject).plate).padStart(4, "0")}-${(object as SdssObject).mjd}-${String((object as SdssObject).fiber).padStart(4, "0")}`
+      : null;
 
   const downloadCard = async () => {
     if (!spectrum) return;
@@ -664,8 +703,8 @@ export default function Home() {
         <div className="intro-copy">
           <p>
             Compare 800 class-selected SDSS galaxies with a 400-object DESI DR1
-            sample. Toggle the same calibrated spectrum between observed and
-            a flux-conserving rest-frame grid.
+            sample. Toggle each calibrated spectrum between its observed and
+            rest frames.
           </p>
           <div className="instrument-strip">
             <span>{survey === "sdss" ? "SDSS DR18" : "DESI DR1"}</span>
@@ -708,7 +747,11 @@ export default function Home() {
               <div className="section-label"><span>02</span> Inspect the evidence</div>
               <h2>{group.name}</h2>
             </div>
-            <div className="object-id"><span>{survey.toUpperCase()} OBJECT</span><strong>{objectLabel}</strong></div>
+            <div className="object-id">
+              <span>{survey.toUpperCase()} OBJECT</span>
+              <strong>{objectLabel}</strong>
+              {spectrumLabel && <small>{spectrumLabel}</small>}
+            </div>
             <div className="redshift"><span>REDSHIFT</span><strong>z {object.z.toFixed(4)}</strong></div>
           </div>
 
@@ -719,11 +762,6 @@ export default function Home() {
                   <button className={frame === "observed" ? "active" : ""} onClick={() => setFrame("observed")}>Observed frame</button>
                   <button className={frame === "rest" ? "active" : ""} onClick={() => setFrame("rest")}>Rest frame</button>
                 </div>
-                <span>
-                  {frame === "observed"
-                    ? "Light: data · dark: smoothed guide"
-                    : "Rebinned with fλ,rest = (1 + z) fλ,obs"}
-                </span>
               </div>
               <SpectrumPlot
                 spectrum={spectrum}
@@ -735,12 +773,6 @@ export default function Home() {
                 survey={survey}
                 objectLabel={objectLabel}
               />
-              <div className="spectrum-method">
-                {frame === "rest"
-                  ? "Flux-conserving rest frame: λ ÷ (1 + z), fλ × (1 + z), then overlap-integrated onto a uniform grid."
-                  : "The light trace retains the rebinned measurements; the dark trace is a Gaussian-smoothed visual guide, not a model fit."}
-                <a href="https://arxiv.org/abs/1705.05165" target="_blank" rel="noreferrer">Resampling reference ↗</a>
-              </div>
             </div>
 
             <aside className="postage-card">

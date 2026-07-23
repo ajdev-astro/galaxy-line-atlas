@@ -359,14 +359,15 @@ export const desiFamilies = [
     color: "#aa91ff",
     signal: "z = 1.0–2.5 · broad UV emission",
     lesson:
-      "Quasar spectra are governed by broad permitted lines and a blue power-law continuum. At these redshifts, Mg II and C III] replace Hα as landmarks.",
+      "Quasar spectra are governed by broad permitted lines and a blue power-law continuum. Lyα enters the DESI band above z ≈ 2, alongside C IV, C III] and Mg II.",
     question: "Why do the familiar low-z BPT lines disappear from these spectra?",
     answer: "Cosmological redshift moves rest-frame optical lines past the DESI wavelength limit while rest-UV lines enter the band.",
-    lookFor: ["Mg II", "C III]", "C IV", "broad lines"],
+    lookFor: ["Lyα", "C IV", "C III]", "Mg II"],
   },
 ] as const;
 
 export const spectralLines = [
+  { name: "Lyα", rest: 1215.67, kind: "emission", note: "Strong rest-UV line; a key landmark for high-redshift systems" },
   { name: "C IV", rest: 1549, kind: "emission", note: "Broad high-ionisation quasar line" },
   { name: "C III]", rest: 1909, kind: "emission", note: "Semi-forbidden quasar redshift landmark" },
   { name: "Mg II", rest: 2798, kind: "emission", note: "Broad quasar line; black-hole and redshift work" },
