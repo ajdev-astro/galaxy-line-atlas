@@ -7,7 +7,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(origin),
   title: "Line / Atlas — Learn galaxy spectra by sight",
   description:
-    "An interactive field guide to real SDSS and DESI galaxy spectra, line diagnostics and galaxy populations.",
+    "An interactive field guide to real SDSS, DESI and GAMA galaxy spectra, line diagnostics and galaxy populations.",
   icons: {
     icon: `${origin}/favicon.svg`,
     shortcut: `${origin}/favicon.svg`,

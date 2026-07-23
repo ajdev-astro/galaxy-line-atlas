@@ -10,7 +10,7 @@
     "build": "next build",
     "build:github": "NEXT_PUBLIC_BASE_PATH=/galaxy-line-atlas next build",
     "test": "next build",
-    "lint": "eslint . --ignore-pattern .next --ignore-pattern out"
+    "lint": "eslint . --ignore-pattern .next --ignore-pattern out --ignore-pattern dist"
   },
   "dependencies": {
     "next": "16.2.6",

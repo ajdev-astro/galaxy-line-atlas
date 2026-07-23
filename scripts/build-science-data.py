@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the static SDSS and DESI teaching datasets used by the atlas.
+"""Build the static SDSS, DESI and GAMA teaching datasets used by the atlas.
 
 Run with:
   python -m pip install -r scripts/requirements.txt
@@ -28,7 +28,6 @@ import numpy as np
 import requests
 from astropy.io import fits
 from astropy.io.votable import parse_single_table
-from astropy.visualization import make_lupton_rgb
 from PIL import Image
 
 
@@ -39,9 +38,22 @@ SDSS_SPECTRA = PUBLIC / "sdss" / "spectra-data"
 SDSS_STAMPS = PUBLIC / "sdss" / "stamps"
 DESI_SPECTRA = PUBLIC / "desi" / "spectra-data"
 DESI_STAMPS = PUBLIC / "desi" / "stamps"
+GAMA_SPECTRA = PUBLIC / "gama" / "spectra-data"
+GAMA_STAMPS = PUBLIC / "gama" / "stamps"
 DES_SIA = "https://datalab.noirlab.edu/sia/des_dr2"
+GAMA_QUERY = "https://www.gama-survey.org/dr4/query/index.php"
+GAMA_ROOT = "https://www.gama-survey.org"
+LEGACY_CUTOUT = "https://www.legacysurvey.org/viewer/jpeg-cutout"
 
-for directory in (DATA, SDSS_SPECTRA, SDSS_STAMPS, DESI_SPECTRA, DESI_STAMPS):
+for directory in (
+    DATA,
+    SDSS_SPECTRA,
+    SDSS_STAMPS,
+    DESI_SPECTRA,
+    DESI_STAMPS,
+    GAMA_SPECTRA,
+    GAMA_STAMPS,
+):
     directory.mkdir(parents=True, exist_ok=True)
 
 SESSION = requests.Session()
@@ -510,25 +522,38 @@ def des_colour_cutout(row):
         response.raise_for_status()
         with fits.open(io.BytesIO(response.content), memmap=False) as hdul:
             bands[band] = np.asarray(hdul[0].data, dtype=float)
-    rgb = make_lupton_rgb(
-        bands["i"],
-        bands["r"],
-        bands["g"],
-        stretch=20,
-        Q=8,
+    raise RuntimeError("Local DES colour composites have been retired")
+
+
+def legacy_survey_cutout(row, destination, force=False):
+    """Cache the official Legacy Surveys DR10 colour rendering."""
+    if destination.exists() and not force:
+        return
+    response = SESSION.get(
+        LEGACY_CUTOUT,
+        params={
+            "ra": row["ra"],
+            "dec": row["dec"],
+            "layer": "ls-dr10",
+            "pixscale": 0.262,
+            "size": 360,
+        },
+        timeout=120,
     )
-    image = Image.fromarray(rgb).resize((360, 360), Image.Resampling.LANCZOS)
-    image.save(DESI_STAMPS / f"{row['targetid']}.jpg", quality=93)
+    response.raise_for_status()
+    image = Image.open(io.BytesIO(response.content)).convert("RGB")
+    if image.width < 300 or image.height < 300:
+        raise RuntimeError("Legacy Surveys returned an undersized cutout")
+    image.save(destination, quality=93)
 
 
 def cache_desi_stamp(row):
-    if row.get("imageSource") == "DES DR2":
-        try:
-            des_colour_cutout(row)
-            return
-        except (requests.RequestException, RuntimeError, ValueError, OSError):
-            row["imageSource"] = "SDSS / SkyView fallback"
-    legacy_cutout(row)
+    destination = DESI_STAMPS / f"{row['targetid']}.jpg"
+    try:
+        legacy_survey_cutout(row, destination)
+        row["imageSource"] = "Legacy Surveys DR10"
+    except (requests.RequestException, RuntimeError, ValueError, OSError):
+        row["imageSource"] = row.get("imageSource", "Existing survey imaging")
 
 
 def build_desi():
@@ -649,6 +674,209 @@ def build_desi_stamps():
             future.result()
             if index % 20 == 0:
                 print(f"DESI stamps: {index}/{len(catalog)}")
+    (DATA / "desi-catalog.json").write_text(
+        json.dumps(catalog, separators=(",", ":"))
+    )
+
+
+GAMA_BASE_SELECT = """
+    SELECT
+      g.SPECID AS id, g.CATAID AS cataid, g.RA AS ra, g.DEC AS declination,
+      g.Z AS redshift, s.GAMA_NAME AS gama_name, s.URL AS spectrum_url,
+      g.SN AS continuum_sn, g.D4000N AS d4000,
+      LOG10(g.NIIR_FLUX/g.HA_FLUX) AS bpt_x,
+      LOG10(g.OIIIR_FLUX/g.HB_FLUX) AS bpt_y
+    FROM GaussFitSimplev05 g
+    JOIN SpecAllv27 s ON s.SPECID = g.SPECID
+    WHERE g.SURVEY = 'GAMA' AND g.NQ > 2 AND g.IS_BEST = 1
+      AND g.Z BETWEEN 0.02 AND 0.25
+"""
+
+GAMA_BPT_QUALITY = """
+      AND g.HA_FLUX > 0 AND g.HA_FLUX_ERR > 0
+      AND g.HB_FLUX > 0 AND g.HB_FLUX_ERR > 0
+      AND g.OIIIR_FLUX > 0 AND g.OIIIR_FLUX_ERR > 0
+      AND g.NIIR_FLUX > 0 AND g.NIIR_FLUX_ERR > 0
+      AND g.HA_FLUX/g.HA_FLUX_ERR > 5
+      AND g.HB_FLUX/g.HB_FLUX_ERR > 5
+      AND g.OIIIR_FLUX/g.OIIIR_FLUX_ERR > 5
+      AND g.NIIR_FLUX/g.NIIR_FLUX_ERR > 5
+      AND LOG10(g.NIIR_FLUX/g.HA_FLUX) BETWEEN -2 AND 0.5
+      AND LOG10(g.OIIIR_FLUX/g.HB_FLUX) BETWEEN -1.5 AND 1.5
+"""
+
+GAMA_SQL = {
+    "star-forming": GAMA_BASE_SELECT
+    + GAMA_BPT_QUALITY
+    + """
+      AND LOG10(g.OIIIR_FLUX/g.HB_FLUX)
+          < 0.61/(LOG10(g.NIIR_FLUX/g.HA_FLUX)-0.05)+1.3
+      ORDER BY g.SN DESC LIMIT 140
+    """,
+    "composite": GAMA_BASE_SELECT
+    + GAMA_BPT_QUALITY
+    + """
+      AND LOG10(g.OIIIR_FLUX/g.HB_FLUX)
+          >= 0.61/(LOG10(g.NIIR_FLUX/g.HA_FLUX)-0.05)+1.3
+      AND LOG10(g.OIIIR_FLUX/g.HB_FLUX)
+          < 0.61/(LOG10(g.NIIR_FLUX/g.HA_FLUX)-0.47)+1.19
+      ORDER BY g.SN DESC LIMIT 140
+    """,
+    "agn": GAMA_BASE_SELECT
+    + GAMA_BPT_QUALITY
+    + """
+      AND LOG10(g.OIIIR_FLUX/g.HB_FLUX)
+          >= 0.61/(LOG10(g.NIIR_FLUX/g.HA_FLUX)-0.47)+1.19
+      ORDER BY g.SN DESC LIMIT 140
+    """,
+    "quenched": GAMA_BASE_SELECT
+    + """
+      AND g.SN > 8 AND g.D4000N > 1.7 AND ABS(g.HA_EW) < 3
+      ORDER BY g.SN DESC LIMIT 140
+    """,
+}
+
+
+def gama_query(sql):
+    response = SESSION.post(
+        GAMA_QUERY,
+        data={
+            "query": " ".join(sql.split()),
+            "format": "csv",
+            "nshow": "100",
+            "ndownload": "2000",
+            "nsov": "1000",
+        },
+        timeout=90,
+    )
+    response.raise_for_status()
+    match = re.search(r'href="\.\./tmp/(GAMA_[A-Za-z0-9]+\.csv)"', response.text)
+    if not match:
+        raise RuntimeError("GAMA query did not return a catalogue download")
+    catalog = SESSION.get(
+        f"{GAMA_ROOT}/dr4/tmp/{match.group(1)}",
+        timeout=60,
+    )
+    catalog.raise_for_status()
+    return list(csv.DictReader(io.StringIO(catalog.text)))
+
+
+def cache_gama_spectrum(row):
+    destination = GAMA_SPECTRA / f"{row['id']}.json"
+    if destination.exists():
+        return
+    response = SESSION.get(row["spectrumUrl"].replace("http://", "https://"), timeout=90)
+    response.raise_for_status()
+    with fits.open(io.BytesIO(response.content), memmap=False) as hdul:
+        header = hdul[0].header
+        data = np.asarray(hdul[0].data, dtype=float)
+        pixels = np.arange(data.shape[1], dtype=float)
+        wavelength = (
+            header["CRVAL1"]
+            + (pixels + 1 - header["CRPIX1"]) * header["CD1_1"]
+        )
+        flux = data[0]
+        error = data[1]
+        ivar = np.zeros_like(error)
+        valid = np.isfinite(error) & (error > 0)
+        ivar[valid] = 1 / error[valid] ** 2
+    destination.write_text(
+        json.dumps(
+            compact_spectrum(wavelength, flux, ivar),
+            separators=(",", ":"),
+        )
+    )
+
+
+def cache_gama_stamp(row):
+    destination = GAMA_STAMPS / f"{row['id']}.jpg"
+    legacy_survey_cutout(row, destination)
+
+
+def build_gama(download_stamps=True):
+    catalog = []
+    used_ids = set()
+    for category, sql in GAMA_SQL.items():
+        candidates = gama_query(sql)
+        records = [
+            record for record in candidates if record["id"] not in used_ids
+        ][:100]
+        if len(records) != 100:
+            raise RuntimeError(
+                f"GAMA {category}: expected 100 rows, received {len(records)}"
+            )
+        used_ids.update(record["id"] for record in records)
+        for record in records:
+            catalog.append(
+                {
+                    "id": record["id"],
+                    "cataid": record["cataid"],
+                    "name": record["gama_name"],
+                    "ra": float(record["ra"]),
+                    "dec": float(record["declination"]),
+                    "z": float(record["redshift"]),
+                    "category": category,
+                    "imageSource": "Legacy Surveys DR10",
+                    "spectrumUrl": record["spectrum_url"],
+                    "continuumSn": float(record["continuum_sn"]),
+                    "d4000": float(record["d4000"]),
+                    "bptX": (
+                        float(record["bpt_x"]) if record["bpt_x"] else None
+                    ),
+                    "bptY": (
+                        float(record["bpt_y"]) if record["bpt_y"] else None
+                    ),
+                }
+            )
+        print(f"GAMA {category}: selected 100")
+
+    (DATA / "gama-catalog.json").write_text(
+        json.dumps(catalog, separators=(",", ":"))
+    )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(cache_gama_spectrum, row) for row in catalog]
+        for index, future in enumerate(as_completed(futures), 1):
+            future.result()
+            if index % 50 == 0:
+                print(f"GAMA spectra: {index}/{len(catalog)}")
+
+    if download_stamps:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [pool.submit(cache_gama_stamp, row) for row in catalog]
+            for index, future in enumerate(as_completed(futures), 1):
+                future.result()
+                if index % 50 == 0:
+                    print(f"GAMA stamps: {index}/{len(catalog)}")
+
+    print(f"GAMA assets: {len(catalog)}/{len(catalog)}")
+
+
+def rebuild_legacy_stamps():
+    desi = json.loads((DATA / "desi-catalog.json").read_text())
+    gama_path = DATA / "gama-catalog.json"
+    gama = json.loads(gama_path.read_text()) if gama_path.exists() else []
+    jobs = [
+        (row, DESI_STAMPS / f"{row['targetid']}.jpg")
+        for row in desi
+    ] + [
+        (row, GAMA_STAMPS / f"{row['id']}.jpg")
+        for row in gama
+    ]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [
+            pool.submit(legacy_survey_cutout, row, destination, True)
+            for row, destination in jobs
+        ]
+        for index, future in enumerate(as_completed(futures), 1):
+            future.result()
+            if index % 50 == 0:
+                print(f"Legacy Surveys stamps: {index}/{len(jobs)}")
+    for row in desi:
+        row["imageSource"] = "Legacy Surveys DR10"
+    (DATA / "desi-catalog.json").write_text(
+        json.dumps(desi, separators=(",", ":"))
+    )
 
 
 def build_sdss_diagnostics():
@@ -665,7 +893,13 @@ if __name__ == "__main__":
         build_sdss()
     if target in ("all", "desi"):
         build_desi()
+    if target in ("all", "gama"):
+        build_gama()
+    if target == "gama-data":
+        build_gama(download_stamps=False)
     if target == "desi-stamps":
         build_desi_stamps()
+    if target == "legacy-stamps":
+        rebuild_legacy_stamps()
     if target == "sdss-diagnostics":
         build_sdss_diagnostics()
