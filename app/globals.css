@@ -136,9 +136,30 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--cyan); outline-
 .frame-switch { display: flex; }
 .frame-switch button { border: 0; background: transparent; color: #737773; padding: 7px 11px; cursor: pointer; font-size: 9px; text-transform: uppercase; }
 .frame-switch button.active { background: #2b3030; color: var(--paper); }
-.science-plot { background: #f4f1e8; min-height: 400px; display: grid; place-items: center; }
-.science-plot svg { display: block; width: 100%; height: auto; max-height: 500px; }
+.science-plot { background: #fff; min-height: 400px; display: grid; place-items: center; }
+.science-plot svg { display: block; width: 100%; height: auto; max-height: 650px; }
 .svg-line-marker { cursor: pointer; }
+.plot-grid { stroke: #e8e8e8; stroke-width: 1; }
+.plot-axis, .plot-frame { stroke: #151718; stroke-width: 1.4; }
+.plot-header { fill: #101314; font: 600 16px var(--font-geist-mono), monospace; }
+.plot-subheader { fill: #6b6d69; font: 12px var(--font-geist-mono), monospace; }
+.plot-tick { fill: #272a28; font: 12px var(--font-geist-mono), monospace; }
+.plot-axis-label { fill: #101314; font: 600 14px var(--font-geist-mono), monospace; }
+.feature-label { font: 600 11px var(--font-geist-mono), monospace; }
+.raw-spectrum {
+  fill: none; stroke: #c3c7c7; stroke-width: 1.05; opacity: .78;
+  vector-effect: non-scaling-stroke;
+}
+.smooth-spectrum {
+  fill: none; stroke: #111314; stroke-width: 2.15;
+  vector-effect: non-scaling-stroke;
+}
+.spectrum-method {
+  min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  padding: 10px 14px; border-top: 1px solid #333737; color: #91958f;
+  font: 9px/1.45 var(--font-geist-mono), monospace;
+}
+.spectrum-method a { color: #c3c6bf; white-space: nowrap; text-decoration: none; border-bottom: 1px solid #555a56; }
 .plot-loading {
   min-height: 430px; display: grid; place-items: center; background: #f4f1e8;
   color: #77776f; font: 10px var(--font-geist-mono), monospace;
@@ -170,6 +191,10 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--cyan); outline-
 .north, .east { position: absolute; font: 9px var(--font-geist-mono), monospace; text-shadow: 0 1px 4px #000; }
 .north { top: 10px; left: 50%; }.east { right: 10px; top: 50%; }
 .coordinates { display: flex; justify-content: space-between; padding: 11px; border-top: 2px solid var(--accent); color: #9da09b; font: 8px var(--font-geist-mono), monospace; }
+.stamp-source {
+  padding: 0 11px 11px; color: #6f746f; font: 8px var(--font-geist-mono), monospace;
+  text-transform: uppercase; letter-spacing: .08em;
+}
 .stamp-caption { padding: 18px; display: grid; grid-template-columns: 27px 1fr; gap: 11px; }
 .stamp-caption span { font: 700 12px var(--font-geist-mono), monospace; }
 .stamp-caption p { margin: 0; color: #a8aaa5; font-size: 11px; line-height: 1.55; }
@@ -254,18 +279,6 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--cyan); outline-
 .unavailable-inner strong { max-width: 390px; font: 400 28px/1.15 Georgia, serif; }
 .unavailable-inner p { max-width: 430px; color: #858984; font-size: 12px; line-height: 1.65; }
 
-.survey-compare {
-  display: grid; grid-template-columns: 1.1fr auto .7fr; align-items: center; gap: 6vw;
-  padding: 70px 4vw; border-bottom: 1px solid var(--line);
-  background: radial-gradient(circle at 53% 50%, rgba(69,213,197,.09), transparent 30%);
-}
-.survey-compare h2 { margin: 15px 0 0; font: 400 clamp(38px, 4vw, 62px)/.96 Georgia, serif; letter-spacing: -.04em; }
-.survey-compare > p { color: #9da09b; font-size: 14px; line-height: 1.7; }
-.compare-equation { display: flex; align-items: center; gap: 18px; white-space: nowrap; }
-.compare-equation span { font: 400 28px Georgia, serif; border: 1px solid #4b504e; padding: 17px; }
-.compare-equation b { color: var(--cyan); font-weight: 400; }
-.compare-equation sub { font-size: 12px; }
-
 .export-panel {
   min-height: 360px; display: grid; grid-template-columns: 1.3fr .7fr auto; gap: 6vw; align-items: center;
   padding: 62px 4vw; background: var(--paper); color: var(--ink);
@@ -330,7 +343,6 @@ footer a { color: #b8bbb5; text-decoration: none; border-bottom: 1px solid #4d52
   .diagnostics-head { grid-template-columns: 1fr; gap: 20px; }
   .diagnostic-grid { grid-template-columns: 1fr; }
   .export-panel { grid-template-columns: 1fr; padding: 52px 22px; gap: 22px; }
-  .survey-compare { grid-template-columns: 1fr; padding: 52px 22px; gap: 32px; }
   .export-panel button { width: 100%; }
   footer { grid-template-columns: 1fr; padding: 38px 22px; }
 }
@@ -343,6 +355,9 @@ footer a { color: #b8bbb5; text-decoration: none; border-bottom: 1px solid #4d52
   .instrument-strip strong { text-align: left; }
   .study-head h2 { font-size: 29px; }
   .science-plot { min-height: 260px; }
+  .card-toolbar > span { display: none; }
+  .spectrum-method { display: block; }
+  .spectrum-method a { display: inline-block; margin-top: 6px; }
   .postage-card { grid-template-columns: 135px 1fr; }
   .stamp-caption { padding: 12px; }
   .object-navigation { grid-template-columns: auto 1fr auto; }

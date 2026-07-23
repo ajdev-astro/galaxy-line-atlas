@@ -27,6 +27,9 @@ from pathlib import Path
 import numpy as np
 import requests
 from astropy.io import fits
+from astropy.io.votable import parse_single_table
+from astropy.visualization import make_lupton_rgb
+from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +39,7 @@ SDSS_SPECTRA = PUBLIC / "sdss" / "spectra-data"
 SDSS_STAMPS = PUBLIC / "sdss" / "stamps"
 DESI_SPECTRA = PUBLIC / "desi" / "spectra-data"
 DESI_STAMPS = PUBLIC / "desi" / "stamps"
+DES_SIA = "https://datalab.noirlab.edu/sia/des_dr2"
 
 for directory in (DATA, SDSS_SPECTRA, SDSS_STAMPS, DESI_SPECTRA, DESI_STAMPS):
     directory.mkdir(parents=True, exist_ok=True)
@@ -461,6 +465,72 @@ def legacy_cutout(row):
                 raise
 
 
+def des_sia_table(row):
+    response = SESSION.get(
+        DES_SIA,
+        params={"POS": f"{row['ra']},{row['dec']}", "SIZE": "0.02"},
+        timeout=60,
+    )
+    response.raise_for_status()
+    return parse_single_table(io.BytesIO(response.content)).to_table()
+
+
+def des_has_coverage(record):
+    # Most DES/DESI overlap in this sample is in the south Galactic cap.
+    # Prefiltering avoids thousands of empty SIA service calls.
+    if not ((record["ra"] < 70 or record["ra"] > 300) and record["dec"] < 5):
+        return False
+    try:
+        table = des_sia_table(record)
+    except (requests.RequestException, ValueError):
+        return False
+    bands = {str(result["obs_bandpass"]) for result in table}
+    return {"g", "r", "i"}.issubset(bands)
+
+
+def des_colour_cutout(row):
+    table = des_sia_table(row)
+    urls = {}
+    for result in table:
+        band = str(result["obs_bandpass"])
+        url = str(result["access_url"])
+        if (
+            band in ("g", "r", "i")
+            and band not in urls
+            and "nobkg" not in url
+            and "extn=1" in url
+        ):
+            urls[band] = url
+    if set(urls) != {"g", "r", "i"}:
+        raise RuntimeError("DES DR2 g/r/i coadds are not all available")
+
+    bands = {}
+    for band, url in urls.items():
+        response = SESSION.get(url, timeout=90)
+        response.raise_for_status()
+        with fits.open(io.BytesIO(response.content), memmap=False) as hdul:
+            bands[band] = np.asarray(hdul[0].data, dtype=float)
+    rgb = make_lupton_rgb(
+        bands["i"],
+        bands["r"],
+        bands["g"],
+        stretch=20,
+        Q=8,
+    )
+    image = Image.fromarray(rgb).resize((360, 360), Image.Resampling.LANCZOS)
+    image.save(DESI_STAMPS / f"{row['targetid']}.jpg", quality=93)
+
+
+def cache_desi_stamp(row):
+    if row.get("imageSource") == "DES DR2":
+        try:
+            des_colour_cutout(row)
+            return
+        except (requests.RequestException, RuntimeError, ValueError, OSError):
+            row["imageSource"] = "SDSS / SkyView fallback"
+    legacy_cutout(row)
+
+
 def build_desi():
     client = sparcl_client()
     outfields = [
@@ -482,12 +552,31 @@ def build_desi():
         found = client.find(
             outfields=outfields,
             constraints=config["constraints"],
-            limit=500,
+            limit=1500,
         )
-        selected = found.records[:20]
-        if len(selected) != 20:
+        likely_des = [
+            record
+            for record in found.records
+            if (record["ra"] < 70 or record["ra"] > 300) and record["dec"] < 5
+        ]
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            coverage = list(pool.map(des_has_coverage, likely_des))
+        des_records = [
+            record for record, covered in zip(likely_des, coverage) if covered
+        ]
+        selected = des_records[:100]
+        selected_ids = {record["sparcl_id"] for record in selected}
+        if len(selected) < 100:
+            selected.extend(
+                record
+                for record in found.records
+                if record["sparcl_id"] not in selected_ids
+            )
+            selected = selected[:100]
+        des_ids = {record["sparcl_id"] for record in des_records}
+        if len(selected) != 100:
             raise RuntimeError(
-                f"DESI {family}: expected 20 rows, received {len(selected)}"
+                f"DESI {family}: expected 100 rows, received {len(selected)}"
             )
         for record in selected:
             catalog.append(
@@ -498,44 +587,64 @@ def build_desi():
                     "dec": float(record["dec"]),
                     "z": float(record["redshift"]),
                     "family": family,
+                    "imageSource": (
+                        "DES DR2"
+                        if record["sparcl_id"] in des_ids
+                        else "SDSS / SkyView fallback"
+                    ),
                 }
             )
-        print(f"DESI {family}: selected 20")
+        print(
+            f"DESI {family}: selected 100 "
+            f"({sum(record['sparcl_id'] in des_ids for record in selected)} with DES DR2 imaging)"
+        )
 
-    uuids = [row["id"] for row in catalog]
-    retrieved = client.retrieve(
-        uuids,
-        include=["sparcl_id", "wavelength", "flux", "ivar"],
-        dataset_list=["DESI-DR1"],
-        limit=len(uuids),
-        units=False,
-    )
-    by_id = {record["sparcl_id"]: record for record in retrieved.records}
+    by_id = {}
+    missing = [
+        row
+        for row in catalog
+        if not (DESI_SPECTRA / f"{row['targetid']}.json").exists()
+    ]
+    for start in range(0, len(missing), 100):
+        batch = missing[start : start + 100]
+        retrieved = client.retrieve(
+            [row["id"] for row in batch],
+            include=["sparcl_id", "wavelength", "flux", "ivar"],
+            dataset_list=["DESI-DR1"],
+            limit=len(batch),
+            units=False,
+        )
+        by_id.update(
+            {record["sparcl_id"]: record for record in retrieved.records}
+        )
     for row in catalog:
+        spectrum_path = DESI_SPECTRA / f"{row['targetid']}.json"
+        if spectrum_path.exists():
+            continue
         record = by_id[row["id"]]
         payload = compact_spectrum(
             np.asarray(record["wavelength"], dtype=float),
             np.asarray(record["flux"], dtype=float),
             np.asarray(record["ivar"], dtype=float),
         )
-        (DESI_SPECTRA / f"{row['targetid']}.json").write_text(
+        spectrum_path.write_text(
             json.dumps(payload, separators=(",", ":"))
         )
 
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(cache_desi_stamp, row) for row in catalog]
+        for future in as_completed(futures):
+            future.result()
     (DATA / "desi-catalog.json").write_text(
         json.dumps(catalog, separators=(",", ":"))
     )
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [pool.submit(legacy_cutout, row) for row in catalog]
-        for future in as_completed(futures):
-            future.result()
     print(f"DESI assets: {len(catalog)}/{len(catalog)}")
 
 
 def build_desi_stamps():
     catalog = json.loads((DATA / "desi-catalog.json").read_text())
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [pool.submit(legacy_cutout, row) for row in catalog]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(cache_desi_stamp, row) for row in catalog]
         for index, future in enumerate(as_completed(futures), 1):
             future.result()
             if index % 20 == 0:
