@@ -10,11 +10,12 @@ import {
 
 const LRS_MIN = 3700;
 const LRS_MAX = 9500;
+const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
 function imgUrl(kind: "spectrum" | "stamp", galaxy: (typeof galaxies)[number]) {
   return kind === "spectrum"
-    ? `/api/sdss/spectrum?id=${galaxy.id}`
-    : `/api/sdss/stamp?ra=${galaxy.ra}&dec=${galaxy.dec}`;
+    ? `${BASE_PATH}/sdss/spectra/${galaxy.id}.jpg`
+    : `${BASE_PATH}/sdss/stamps/${galaxy.id}.jpg`;
 }
 
 function loadImage(src: string) {
@@ -398,4 +399,3 @@ export default function Home() {
     </main>
   );
 }
-
