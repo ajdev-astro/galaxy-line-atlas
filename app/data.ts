@@ -315,7 +315,61 @@ export const galaxies: Galaxy[] = Object.entries(samples).flatMap(
     })),
 );
 
+export const desiFamilies = [
+  {
+    id: "bgs",
+    short: "LOW",
+    name: "Nearby galaxies",
+    color: "#56d7c8",
+    signal: "z = 0.02–0.25 · rich optical line set",
+    lesson:
+      "Nearby DESI galaxies keep Hα, [N II] and [S II] in view, making them the cleanest bridge to the low-redshift SDSS classes.",
+    question: "Why are nearby galaxies especially useful for learning BPT features?",
+    answer: "The full Hβ–[O III] and Hα–[N II]/[S II] line sets remain inside the optical window.",
+    lookFor: ["Hα", "[N II]", "[S II]", "[O III]"],
+  },
+  {
+    id: "lrg",
+    short: "MID",
+    name: "Intermediate-z galaxies",
+    color: "#f0bc62",
+    signal: "z = 0.4–0.8 · break and absorption patterns",
+    lesson:
+      "At intermediate redshift, the 4000 Å break and Ca H+K move into the middle of DESI’s observed window while Hα may leave it.",
+    question: "What becomes a stronger redshift anchor when Hα is no longer visible?",
+    answer: "The 4000 Å break together with Ca H+K and other stellar absorption features.",
+    lookFor: ["D4000", "Ca H+K", "G-band", "[O II]"],
+  },
+  {
+    id: "elg",
+    short: "HIGH",
+    name: "High-z galaxies",
+    color: "#ff7b75",
+    signal: "z = 0.8–1.3 · [O II] often dominates",
+    lesson:
+      "For high-redshift galaxies, rest-optical red lines shift beyond the spectrograph. [O II], Hβ and [O III] become the practical anchors.",
+    question: "Which feature often carries the redshift when Hα is outside the DESI band?",
+    answer: "The resolved or blended [O II] λλ3726,3729 doublet, supported by Hβ and [O III] when available.",
+    lookFor: ["[O II]", "Hβ", "[O III]", "Ca H+K"],
+  },
+  {
+    id: "qso",
+    short: "QSO",
+    name: "Quasars",
+    color: "#aa91ff",
+    signal: "z = 1.0–2.5 · broad UV emission",
+    lesson:
+      "Quasar spectra are governed by broad permitted lines and a blue power-law continuum. At these redshifts, Mg II and C III] replace Hα as landmarks.",
+    question: "Why do the familiar low-z BPT lines disappear from these spectra?",
+    answer: "Cosmological redshift moves rest-frame optical lines past the DESI wavelength limit while rest-UV lines enter the band.",
+    lookFor: ["Mg II", "C III]", "C IV", "broad lines"],
+  },
+] as const;
+
 export const spectralLines = [
+  { name: "C IV", rest: 1549, kind: "emission", note: "Broad high-ionisation quasar line" },
+  { name: "C III]", rest: 1909, kind: "emission", note: "Semi-forbidden quasar redshift landmark" },
+  { name: "Mg II", rest: 2798, kind: "emission", note: "Broad quasar line; black-hole and redshift work" },
   { name: "[O II]", rest: 3727, kind: "emission", note: "Star formation; ionisation and metallicity" },
   { name: "Ca K", rest: 3934, kind: "absorption", note: "Old/intermediate stellar populations" },
   { name: "Ca H", rest: 3969, kind: "absorption", note: "Blends with Hε at 3970 Å" },
