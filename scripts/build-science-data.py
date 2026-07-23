@@ -210,6 +210,90 @@ def query_sdss(category: str, sql: str):
     ]
 
 
+def enrich_sdss_diagnostics(catalog):
+    """Attach MPA–JHU line-ratio, stellar-mass and SFR measurements."""
+    unique_ids = sorted({row["id"] for row in catalog})
+    diagnostics = {}
+    for start in range(0, len(unique_ids), 50):
+        batch = unique_ids[start : start + 50]
+        sql = f"""
+            SELECT g.specObjID, g.h_alpha_flux, g.h_alpha_flux_err,
+                   g.h_beta_flux, g.h_beta_flux_err,
+                   g.oiii_5007_flux, g.oiii_5007_flux_err,
+                   g.nii_6584_flux, g.nii_6584_flux_err,
+                   e.bptclass, e.lgm_tot_p50, e.sfr_tot_p50
+            FROM galSpecLine g
+            LEFT JOIN galSpecExtra e ON e.specObjID = g.specObjID
+            WHERE g.specObjID IN ({",".join(batch)})
+        """
+        response = SESSION.get(
+            "https://skyserver.sdss.org/dr18/SkyServerWS/SearchTools/SqlSearch",
+            params={"cmd": " ".join(sql.split()), "format": "csv"},
+            timeout=90,
+        )
+        response.raise_for_status()
+        csv_text = response.text
+        if csv_text.startswith("#Table"):
+            csv_text = csv_text.split("\n", 1)[1]
+        for result in csv.DictReader(io.StringIO(csv_text)):
+            values = {
+                name: float(result[name])
+                for name in (
+                    "h_alpha_flux",
+                    "h_alpha_flux_err",
+                    "h_beta_flux",
+                    "h_beta_flux_err",
+                    "oiii_5007_flux",
+                    "oiii_5007_flux_err",
+                    "nii_6584_flux",
+                    "nii_6584_flux_err",
+                )
+            }
+            payload = {}
+            reliable = all(
+                values[name] > 0
+                and values[name.replace("_flux", "_flux_err")] > 0
+                and values[name] / values[name.replace("_flux", "_flux_err")] >= 3
+                for name in (
+                    "h_alpha_flux",
+                    "h_beta_flux",
+                    "oiii_5007_flux",
+                    "nii_6584_flux",
+                )
+            )
+            if reliable:
+                payload["bptX"] = round(
+                    math.log10(values["nii_6584_flux"] / values["h_alpha_flux"]), 4
+                )
+                payload["bptY"] = round(
+                    math.log10(values["oiii_5007_flux"] / values["h_beta_flux"]), 4
+                )
+            for source, destination in (
+                ("lgm_tot_p50", "logMass"),
+                ("sfr_tot_p50", "logSfr"),
+            ):
+                try:
+                    value = float(result[source])
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(value) and -20 < value < 20:
+                    payload[destination] = round(value, 4)
+            try:
+                payload["bptClass"] = int(result["bptclass"])
+            except (TypeError, ValueError):
+                pass
+            diagnostics[str(result["specObjID"])] = payload
+
+    for row in catalog:
+        row.update(diagnostics.get(row["id"], {}))
+    print(
+        "SDSS diagnostics: "
+        f"{sum('bptX' in row for row in catalog)} BPT placements; "
+        f"{sum('logMass' in row and 'logSfr' in row for row in catalog)} mass–SFR placements"
+    )
+    return catalog
+
+
 def cache_sdss(row):
     spectrum_path = SDSS_SPECTRA / f"{row['id']}.json"
     stamp_path = SDSS_STAMPS / f"{row['id']}.jpg"
@@ -255,6 +339,7 @@ def build_sdss():
         catalog.extend(rows)
         print(f"SDSS {category}: selected {len(rows)}")
 
+    enrich_sdss_diagnostics(catalog)
     (DATA / "sdss-catalog.json").write_text(
         json.dumps(catalog, separators=(",", ":"))
     )
@@ -457,6 +542,14 @@ def build_desi_stamps():
                 print(f"DESI stamps: {index}/{len(catalog)}")
 
 
+def build_sdss_diagnostics():
+    catalog = json.loads((DATA / "sdss-catalog.json").read_text())
+    enrich_sdss_diagnostics(catalog)
+    (DATA / "sdss-catalog.json").write_text(
+        json.dumps(catalog, separators=(",", ":"))
+    )
+
+
 if __name__ == "__main__":
     target = sys.argv[1] if len(sys.argv) > 1 else "all"
     if target in ("all", "sdss"):
@@ -465,3 +558,5 @@ if __name__ == "__main__":
         build_desi()
     if target == "desi-stamps":
         build_desi_stamps()
+    if target == "sdss-diagnostics":
+        build_sdss_diagnostics()

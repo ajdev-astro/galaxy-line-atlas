@@ -9,8 +9,6 @@ import {
 } from "./data";
 
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
-const OBS_MIN = 3600;
-const OBS_MAX = 10000;
 
 type Survey = "sdss" | "desi";
 type SdssObject = {
@@ -22,6 +20,11 @@ type SdssObject = {
   mjd: number;
   fiber: number;
   category: CategoryId;
+  bptX?: number;
+  bptY?: number;
+  bptClass?: number;
+  logMass?: number;
+  logSfr?: number;
 };
 type DesiObject = {
   id: string;
@@ -33,6 +36,14 @@ type DesiObject = {
 };
 type AtlasObject = SdssObject | DesiObject;
 type Spectrum = { w: number[]; f: number[] };
+
+const scale = (
+  value: number,
+  sourceMin: number,
+  sourceMax: number,
+  targetMin: number,
+  targetMax: number,
+) => targetMin + ((value - sourceMin) / (sourceMax - sourceMin)) * (targetMax - targetMin);
 
 function quantile(values: number[], q: number) {
   const sorted = [...values].sort((a, b) => a - b);
@@ -174,6 +185,164 @@ function SpectrumPlot({
         </text>
       </svg>
     </div>
+  );
+}
+
+function DiagnosticUnavailable({ title, note }: { title: string; note: string }) {
+  return (
+    <article className="diagnostic-card unavailable">
+      <div className="diagnostic-title"><span>CATALOGUE VIEW</span><h3>{title}</h3></div>
+      <div className="unavailable-inner">
+        <strong>Not assigned for this DESI teaching sample</strong>
+        <p>{note}</p>
+      </div>
+    </article>
+  );
+}
+
+function BptPlot({
+  rows,
+  selected,
+  color,
+}: {
+  rows: SdssObject[];
+  selected: SdssObject;
+  color: string;
+}) {
+  const xMin = -2;
+  const xMax = 0.5;
+  const yMin = -1.5;
+  const yMax = 1.5;
+  const px = (value: number) => scale(value, xMin, xMax, 58, 610);
+  const py = (value: number) => scale(value, yMin, yMax, 366, 24);
+  const curve = (fn: (x: number) => number, from: number, to: number) =>
+    Array.from({ length: 90 }, (_, index) => from + ((to - from) * index) / 89)
+      .map((x, index) => `${index ? "L" : "M"}${px(x).toFixed(1)},${py(fn(x)).toFixed(1)}`)
+      .join(" ");
+  const valid = rows.filter(
+    (row) =>
+      row.bptX !== undefined &&
+      row.bptY !== undefined &&
+      row.bptX >= xMin &&
+      row.bptX <= xMax &&
+      row.bptY >= yMin &&
+      row.bptY <= yMax,
+  );
+  const hasSelected = selected.bptX !== undefined && selected.bptY !== undefined;
+
+  return (
+    <article className="diagnostic-card">
+      <div className="diagnostic-title">
+        <span>IONISATION SOURCE</span><h3>BPT position</h3>
+        <p>log([N II]/Hα) versus log([O III]/Hβ)</p>
+      </div>
+      <svg viewBox="0 0 640 410" role="img" aria-label="BPT diagnostic diagram">
+        <rect width="640" height="410" fill="#f4f1e8" />
+        {[-2, -1.5, -1, -0.5, 0, 0.5].map((tick) => (
+          <g key={`x-${tick}`}>
+            <line x1={px(tick)} x2={px(tick)} y1="24" y2="366" stroke="#ddd8ca" />
+            <text x={px(tick)} y="389" textAnchor="middle">{tick}</text>
+          </g>
+        ))}
+        {[-1.5, -1, -0.5, 0, 0.5, 1, 1.5].map((tick) => (
+          <g key={`y-${tick}`}>
+            <line x1="58" x2="610" y1={py(tick)} y2={py(tick)} stroke="#ddd8ca" />
+            <text x="48" y={py(tick) + 4} textAnchor="end">{tick}</text>
+          </g>
+        ))}
+        {valid.map((row) => (
+          <circle key={`${row.id}-${row.category}`} cx={px(row.bptX!)} cy={py(row.bptY!)} r="2.1" fill="#777b76" opacity=".34" />
+        ))}
+        <path d={curve((x) => 0.61 / (x - 0.05) + 1.3, -1.95, -0.12)} fill="none" stroke="#28857c" strokeWidth="2" />
+        <path d={curve((x) => 0.61 / (x - 0.47) + 1.19, -1.95, 0.23)} fill="none" stroke="#9a5d32" strokeWidth="2" strokeDasharray="6 5" />
+        <text x={px(-1.55)} y={py(-.75)} className="region-label">STAR FORMING</text>
+        <text x={px(-.62)} y={py(.25)} className="region-label">COMPOSITE</text>
+        <text x={px(-.12)} y={py(1.05)} className="region-label">AGN</text>
+        {hasSelected && (
+          <>
+            <circle cx={px(selected.bptX!)} cy={py(selected.bptY!)} r="9" fill={color} stroke="#111" strokeWidth="3" />
+            <circle cx={px(selected.bptX!)} cy={py(selected.bptY!)} r="14" fill="none" stroke={color} strokeWidth="2" opacity=".5" />
+          </>
+        )}
+        <text x="334" y="405" textAnchor="middle" className="axis-label">log([N II] λ6584 / Hα)</text>
+        <text x="16" y="195" textAnchor="middle" transform="rotate(-90 16 195)" className="axis-label">log([O III] λ5007 / Hβ)</text>
+      </svg>
+      <p className="diagnostic-note">
+        {hasSelected
+          ? `This object lies at (${selected.bptX!.toFixed(2)}, ${selected.bptY!.toFixed(2)}). The background shows ${valid.length} reliable placements from this atlas.`
+          : "No point is shown because one or more required emission lines has S/N below 3."}
+      </p>
+    </article>
+  );
+}
+
+function MainSequencePlot({
+  rows,
+  selected,
+  color,
+}: {
+  rows: SdssObject[];
+  selected: SdssObject;
+  color: string;
+}) {
+  const xMin = 8;
+  const xMax = 12;
+  const yMin = -3.5;
+  const yMax = 2;
+  const px = (value: number) => scale(value, xMin, xMax, 58, 610);
+  const py = (value: number) => scale(value, yMin, yMax, 366, 24);
+  const valid = rows.filter(
+    (row) =>
+      row.logMass !== undefined &&
+      row.logSfr !== undefined &&
+      row.logMass >= xMin &&
+      row.logMass <= xMax &&
+      row.logSfr >= yMin &&
+      row.logSfr <= yMax,
+  );
+  const hasSelected = selected.logMass !== undefined && selected.logSfr !== undefined;
+
+  return (
+    <article className="diagnostic-card">
+      <div className="diagnostic-title">
+        <span>GALAXY GROWTH</span><h3>Stellar main sequence</h3>
+        <p>Total MPA–JHU stellar mass and star-formation rate</p>
+      </div>
+      <svg viewBox="0 0 640 410" role="img" aria-label="Stellar mass versus star formation rate diagram">
+        <rect width="640" height="410" fill="#f4f1e8" />
+        {[8, 9, 10, 11, 12].map((tick) => (
+          <g key={`x-${tick}`}>
+            <line x1={px(tick)} x2={px(tick)} y1="24" y2="366" stroke="#ddd8ca" />
+            <text x={px(tick)} y="389" textAnchor="middle">{tick}</text>
+          </g>
+        ))}
+        {[-3, -2, -1, 0, 1, 2].map((tick) => (
+          <g key={`y-${tick}`}>
+            <line x1="58" x2="610" y1={py(tick)} y2={py(tick)} stroke="#ddd8ca" />
+            <text x="48" y={py(tick) + 4} textAnchor="end">{tick}</text>
+          </g>
+        ))}
+        {valid.map((row) => (
+          <circle key={`${row.id}-${row.category}`} cx={px(row.logMass!)} cy={py(row.logSfr!)} r="2.1" fill="#777b76" opacity=".34" />
+        ))}
+        <line x1={px(8.3)} y1={py(-1.4)} x2={px(11.4)} y2={py(.8)} stroke="#28857c" strokeWidth="2" strokeDasharray="7 6" />
+        <text x={px(8.45)} y={py(-1.05)} className="region-label">STAR-FORMING LOCUS</text>
+        <text x={px(10.65)} y={py(-2.35)} className="region-label">QUIESCENT</text>
+        {hasSelected && (
+          <>
+            <circle cx={px(selected.logMass!)} cy={py(selected.logSfr!)} r="9" fill={color} stroke="#111" strokeWidth="3" />
+            <circle cx={px(selected.logMass!)} cy={py(selected.logSfr!)} r="14" fill="none" stroke={color} strokeWidth="2" opacity=".5" />
+          </>
+        )}
+        <text x="334" y="405" textAnchor="middle" className="axis-label">log(M★ / M☉)</text>
+        <text x="16" y="195" textAnchor="middle" transform="rotate(-90 16 195)" className="axis-label">log(SFR / M☉ yr⁻¹)</text>
+      </svg>
+      <p className="diagnostic-note">
+        {hasSelected
+          ? `This object has log M★ = ${selected.logMass!.toFixed(2)} and log SFR = ${selected.logSfr!.toFixed(2)}. The grey cloud is the measured SDSS atlas sample.`
+          : "No point is shown because the legacy MPA–JHU catalogue has no usable mass–SFR estimate for this object."}
+      </p>
+    </article>
   );
 }
 
@@ -359,7 +528,7 @@ export default function Home() {
 
       <section className="intro" id="top">
         <div>
-          <p className="eyebrow">A visual field guide for 4MOST</p>
+          <p className="eyebrow">A visual field guide to galaxy spectra</p>
           <h1>Learn the lines.<br />Read the galaxy.</h1>
         </div>
         <div className="intro-copy">
@@ -371,7 +540,7 @@ export default function Home() {
           <div className="instrument-strip">
             <span>{survey === "sdss" ? "SDSS DR18" : "DESI DR1"}</span>
             <strong>{survey === "sdss" ? "≈ 3800 — 9200 Å" : "3600 — 9824 Å"}</strong>
-            <span>4MOST LRS: 3700–9500 Å</span>
+            <span>Observed-frame coverage</span>
           </div>
         </div>
       </section>
@@ -472,7 +641,7 @@ export default function Home() {
             <dl>
               <div><dt>REST</dt><dd>{selectedLine.rest} Å</dd></div>
               <div><dt>OBSERVED</dt><dd>{observedLine.toFixed(0)} Å</dd></div>
-              <div><dt>IN 4MOST LRS?</dt><dd>{observedLine >= 3700 && observedLine <= 9500 ? "YES" : "NO"}</dd></div>
+              <div><dt>IN SURVEY BAND?</dt><dd>{observedLine >= (survey === "sdss" ? 3800 : 3600) && observedLine <= (survey === "sdss" ? 9200 : 9824) ? "YES" : "NO"}</dd></div>
             </dl>
           </div>
           <div className="line-chips">
@@ -495,6 +664,36 @@ export default function Home() {
           )}
           <div className="look-for"><span>LOOK FOR</span>{group.lookFor.map((item) => <b key={item}>{item}</b>)}</div>
         </article>
+      </section>
+
+      <section className="diagnostics" style={{ "--accent": group.color } as React.CSSProperties}>
+        <div className="diagnostics-head">
+          <div className="section-label"><span>05</span> Place the galaxy in context</div>
+          <h2>From a spectrum to a population.</h2>
+          <p>
+            A spectrum becomes more informative when its line ratios and global
+            properties are compared with the rest of the sample.
+          </p>
+        </div>
+        <div className="diagnostic-grid">
+          {survey === "sdss" ? (
+            <>
+              <BptPlot rows={sdss} selected={object as SdssObject} color={group.color} />
+              <MainSequencePlot rows={sdss} selected={object as SdssObject} color={group.color} />
+            </>
+          ) : (
+            <>
+              <DiagnosticUnavailable
+                title="BPT position"
+                note="The DESI teaching subset currently stores spectra and redshifts, but not a homogeneous four-line flux catalogue. The spectrum still shows when the required lines enter or leave the band."
+              />
+              <DiagnosticUnavailable
+                title="Stellar main sequence"
+                note="A survey-consistent DESI stellar-mass and SFR value-added catalogue should be selected before placing these objects on a population diagram."
+              />
+            </>
+          )}
+        </div>
       </section>
 
       <section className="survey-compare">
@@ -522,7 +721,7 @@ export default function Home() {
       </section>
 
       <footer>
-        <div><strong>LINE / ATLAS</strong><span>Transfer learning from SDSS and DESI to 4MOST</span></div>
+        <div><strong>LINE / ATLAS</strong><span>Learn galaxy spectra with SDSS and DESI</span></div>
         <p>Spectra: SDSS DR18 and DESI DR1. Postage stamps: SDSS DR18, with NASA SkyView DSS2 coverage outside the SDSS footprint. Class selections are educational guides, not definitive diagnoses.</p>
         <div className="footer-links">
           <a href="https://skyserver.sdss.org/dr18/" target="_blank" rel="noreferrer">SDSS ↗</a>
