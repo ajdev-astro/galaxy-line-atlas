@@ -1,16 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   categories,
   desiFamilies,
+  gamaFamilies,
   spectralLines,
   type CategoryId,
 } from "./data";
 
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
-type Survey = "sdss" | "desi";
+type Survey = "sdss" | "desi" | "gama";
 type SdssObject = {
   id: string;
   ra: number;
@@ -35,7 +36,21 @@ type DesiObject = {
   family: string;
   imageSource?: string;
 };
-type AtlasObject = SdssObject | DesiObject;
+type GamaObject = {
+  id: string;
+  cataid: string;
+  name: string;
+  ra: number;
+  dec: number;
+  z: number;
+  category: string;
+  imageSource: string;
+  continuumSn: number;
+  d4000: number;
+  bptX?: number;
+  bptY?: number;
+};
+type AtlasObject = SdssObject | DesiObject | GamaObject;
 type Spectrum = { w: number[]; f: number[] };
 
 const scale = (
@@ -173,11 +188,13 @@ function pathForSeries(
   flux: number[],
   yMin: number,
   yMax: number,
+  domainMin?: number,
+  domainMax?: number,
   width = 1100,
   height = 650,
 ) {
-  const xMin = wavelengths[0];
-  const xMax = wavelengths[wavelengths.length - 1];
+  const xMin = domainMin ?? wavelengths[0];
+  const xMax = domainMax ?? wavelengths[wavelengths.length - 1];
   const left = 95;
   const right = width - 35;
   const top = 105;
@@ -185,7 +202,7 @@ function pathForSeries(
   let started = false;
   return wavelengths
     .map((wave, index) => {
-      if (!Number.isFinite(flux[index])) {
+      if (wave < xMin || wave > xMax || !Number.isFinite(flux[index])) {
         started = false;
         return "";
       }
@@ -198,9 +215,15 @@ function pathForSeries(
     .join(" ");
 }
 
-function lineX(rest: number, frame: "observed" | "rest", z: number, spectrum: PreparedSpectrum) {
+function lineX(
+  rest: number,
+  frame: "observed" | "rest",
+  z: number,
+  xMin: number,
+  xMax: number,
+) {
   const wave = frame === "rest" ? rest : rest * (1 + z);
-  return scale(wave, spectrum.w[0], spectrum.w[spectrum.w.length - 1], 95, 1065);
+  return scale(wave, xMin, xMax, 95, 1065);
 }
 
 function formatFlux(value: number) {
@@ -231,6 +254,35 @@ function sdssDesignation(ra: number, dec: number) {
   return `SDSS J${String(raHour).padStart(2, "0")}${String(raMinute).padStart(2, "0")}${truncateFixed(raSecond, 2).padStart(5, "0")}${dec >= 0 ? "+" : "-"}${String(decDegree).padStart(2, "0")}${String(decMinute).padStart(2, "0")}${truncateFixed(decSecond, 1).padStart(4, "0")}`;
 }
 
+function StampImage({
+  primaryUrl,
+  fallbackUrl,
+  alt,
+  useCors,
+}: {
+  primaryUrl: string;
+  fallbackUrl: string;
+  alt: string;
+  useCors: boolean;
+}) {
+  const [useFallback, setUseFallback] = useState(false);
+
+  useEffect(() => {
+    if (primaryUrl === fallbackUrl) return;
+    const timer = window.setTimeout(() => setUseFallback(true), 8000);
+    return () => window.clearTimeout(timer);
+  }, [primaryUrl, fallbackUrl]);
+
+  return (
+    <img
+      src={useFallback ? fallbackUrl : primaryUrl}
+      crossOrigin={!useFallback && useCors ? "anonymous" : undefined}
+      onError={() => setUseFallback(true)}
+      alt={alt}
+    />
+  );
+}
+
 function SpectrumPlot({
   spectrum,
   frame,
@@ -240,6 +292,9 @@ function SpectrumPlot({
   color,
   survey,
   objectLabel,
+  xRange,
+  onZoomRange,
+  interactive = false,
 }: {
   spectrum: Spectrum | null;
   frame: "observed" | "rest";
@@ -249,20 +304,76 @@ function SpectrumPlot({
   color: string;
   survey: Survey;
   objectLabel: string;
+  xRange?: [number, number] | null;
+  onZoomRange?: (range: [number, number] | null) => void;
+  interactive?: boolean;
 }) {
+  const [dragStart, setDragStart] = useState<number | null>(null);
   if (!spectrum) {
     return <div className="plot-loading">Loading calibrated flux…</div>;
   }
   const prepared = prepareSpectrum(spectrum, frame, z);
-  const { yMin, yMax, yTicks } = plotBounds(prepared);
-  const rawPath = pathForSeries(prepared.w, prepared.f, yMin, yMax);
-  const smoothPath = pathForSeries(prepared.w, prepared.smooth, yMin, yMax);
-  const min = prepared.w[0];
-  const max = prepared.w[prepared.w.length - 1];
+  const fullMin = prepared.w[0];
+  const fullMax = prepared.w[prepared.w.length - 1];
+  const min = Math.max(fullMin, xRange?.[0] ?? fullMin);
+  const max = Math.min(fullMax, xRange?.[1] ?? fullMax);
+  const visibleIndices = prepared.w
+    .map((wave, index) => (wave >= min && wave <= max ? index : -1))
+    .filter((index) => index >= 0);
+  const visibleSpectrum: PreparedSpectrum = {
+    w: visibleIndices.map((index) => prepared.w[index]),
+    f: visibleIndices.map((index) => prepared.f[index]),
+    smooth: visibleIndices.map((index) => prepared.smooth[index]),
+  };
+  const { yMin, yMax, yTicks } = plotBounds(visibleSpectrum);
+  const rawPath = pathForSeries(prepared.w, prepared.f, yMin, yMax, min, max);
+  const smoothPath = pathForSeries(prepared.w, prepared.smooth, yMin, yMax, min, max);
   const xTicks = Array.from({ length: 7 }, (_, index) => min + ((max - min) * index) / 6);
+  const pointerWavelength = (clientX: number, svg: SVGSVGElement) => {
+    const bounds = svg.getBoundingClientRect();
+    const viewX = ((clientX - bounds.left) / bounds.width) * 1100;
+    return scale(Math.max(95, Math.min(1065, viewX)), 95, 1065, min, max);
+  };
   return (
-    <div className="science-plot">
-      <svg viewBox="0 0 1100 650" role="img" aria-labelledby="spectrum-title spectrum-description">
+    <div className={interactive ? "science-plot interactive" : "science-plot"}>
+      <svg
+        viewBox="0 0 1100 650"
+        role="img"
+        aria-labelledby="spectrum-title spectrum-description"
+        onPointerDown={(event) => {
+          if (!interactive) return;
+          event.currentTarget.setPointerCapture(event.pointerId);
+          setDragStart(pointerWavelength(event.clientX, event.currentTarget));
+        }}
+        onPointerUp={(event) => {
+          if (!interactive || dragStart === null || !onZoomRange) return;
+          const end = pointerWavelength(event.clientX, event.currentTarget);
+          setDragStart(null);
+          if (Math.abs(end - dragStart) > (max - min) * 0.025) {
+            onZoomRange([Math.min(dragStart, end), Math.max(dragStart, end)]);
+          }
+        }}
+        onDoubleClick={() => interactive && onZoomRange?.(null)}
+        onWheel={(event) => {
+          if (!interactive || !onZoomRange) return;
+          event.preventDefault();
+          const center = pointerWavelength(event.clientX, event.currentTarget);
+          const factor = event.deltaY < 0 ? 0.72 : 1.38;
+          const nextWidth = Math.min(fullMax - fullMin, Math.max(120, (max - min) * factor));
+          const leftFraction = (center - min) / (max - min);
+          let nextMin = center - nextWidth * leftFraction;
+          let nextMax = nextMin + nextWidth;
+          if (nextMin < fullMin) {
+            nextMin = fullMin;
+            nextMax = fullMin + nextWidth;
+          }
+          if (nextMax > fullMax) {
+            nextMax = fullMax;
+            nextMin = fullMax - nextWidth;
+          }
+          onZoomRange([nextMin, nextMax]);
+        }}
+      >
         <title id="spectrum-title">{`${survey.toUpperCase()} ${frame}-frame spectrum for ${objectLabel}`}</title>
         <desc id="spectrum-description">
           Spectrum with labelled spectral features and numerical wavelength and flux-density axes.
@@ -297,7 +408,7 @@ function SpectrumPlot({
           <path d={smoothPath} className="smooth-spectrum" />
         </g>
         {spectralLines.map((line, index) => {
-          const x = lineX(line.rest, frame, z, prepared);
+          const x = lineX(line.rest, frame, z, min, max);
           if (x < 95 || x > 1065) return null;
           const active = index === lineIndex;
           const featureColor = line.kind === "absorption" ? "#c83e35" : "#285fce";
@@ -345,7 +456,7 @@ function DiagnosticUnavailable({ title, note }: { title: string; note: string })
     <article className="diagnostic-card unavailable">
       <div className="diagnostic-title"><span>CATALOGUE VIEW</span><h3>{title}</h3></div>
       <div className="unavailable-inner">
-        <strong>Not assigned for this DESI teaching sample</strong>
+        <strong>Not assigned for this survey sample</strong>
         <p>{note}</p>
       </div>
     </article>
@@ -357,8 +468,8 @@ function BptPlot({
   selected,
   color,
 }: {
-  rows: SdssObject[];
-  selected: SdssObject;
+  rows: Array<{ id: string; category: string; bptX?: number; bptY?: number }>;
+  selected: { bptX?: number; bptY?: number };
   color: string;
 }) {
   const xMin = -2;
@@ -502,6 +613,7 @@ export default function Home() {
   const [survey, setSurvey] = useState<Survey>("sdss");
   const [sdss, setSdss] = useState<SdssObject[]>([]);
   const [desi, setDesi] = useState<DesiObject[]>([]);
+  const [gama, setGama] = useState<GamaObject[]>([]);
   const [groupId, setGroupId] = useState<string>("star-forming");
   const [index, setIndex] = useState(0);
   const [frame, setFrame] = useState<"observed" | "rest">("observed");
@@ -509,32 +621,51 @@ export default function Home() {
   const [spectrum, setSpectrum] = useState<Spectrum | null>(null);
   const [revealed, setRevealed] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [zoomRange, setZoomRange] = useState<[number, number] | null>(null);
+  const spectrumDialog = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
     Promise.all([
       fetch(`${BASE_PATH}/data/sdss-catalog.json`).then((response) => response.json()),
       fetch(`${BASE_PATH}/data/desi-catalog.json`).then((response) => response.json()),
-    ]).then(([sdssRows, desiRows]) => {
+      fetch(`${BASE_PATH}/data/gama-catalog.json`).then((response) => response.json()),
+    ]).then(([sdssRows, desiRows, gamaRows]) => {
       setSdss(sdssRows);
       setDesi(desiRows);
+      setGama(gamaRows);
     });
   }, []);
 
-  const groups = survey === "sdss" ? categories : desiFamilies;
+  useEffect(() => {
+    const dialog = spectrumDialog.current;
+    if (!dialog) return;
+    if (expanded && !dialog.open) dialog.showModal();
+    if (!expanded && dialog.open) dialog.close();
+  }, [expanded]);
+
+  const groups =
+    survey === "sdss"
+      ? categories
+      : survey === "desi"
+        ? desiFamilies
+        : gamaFamilies;
   const group = groups.find((item) => item.id === groupId) ?? groups[0];
   const objects = useMemo(
     () =>
       survey === "sdss"
         ? sdss.filter((item) => item.category === group.id)
-        : desi.filter((item) => item.family === group.id),
-    [survey, sdss, desi, group.id],
+        : survey === "desi"
+          ? desi.filter((item) => item.family === group.id)
+          : gama.filter((item) => item.category === group.id),
+    [survey, sdss, desi, gama, group.id],
   );
   const object = objects[index % Math.max(objects.length, 1)] as AtlasObject | undefined;
 
   useEffect(() => {
     if (!object) return;
-    setSpectrum(null);
-    const key = survey === "sdss" ? object.id : (object as DesiObject).targetid;
+    const key =
+      survey === "desi" ? (object as DesiObject).targetid : object.id;
     fetch(`${BASE_PATH}/${survey}/spectra-data/${key}.json`)
       .then((response) => response.json())
       .then(setSpectrum);
@@ -542,9 +673,10 @@ export default function Home() {
 
   const switchSurvey = (next: Survey) => {
     setSurvey(next);
-    setGroupId(next === "sdss" ? "star-forming" : "bgs");
+    setGroupId(next === "desi" ? "bgs" : "star-forming");
     setIndex(0);
     setRevealed(false);
+    setZoomRange(null);
   };
   const chooseGroup = (id: string) => {
     setGroupId(id);
@@ -554,6 +686,7 @@ export default function Home() {
   const step = (amount: number) => {
     setIndex((current) => (current + amount + objects.length) % objects.length);
     setRevealed(false);
+    setZoomRange(null);
   };
   const randomise = () => {
     const next = groups[Math.floor(Math.random() * groups.length)];
@@ -561,9 +694,12 @@ export default function Home() {
     const count =
       survey === "sdss"
         ? sdss.filter((item) => item.category === next.id).length
-        : desi.filter((item) => item.family === next.id).length;
+        : survey === "desi"
+          ? desi.filter((item) => item.family === next.id).length
+          : gama.filter((item) => item.category === next.id).length;
     setIndex(Math.floor(Math.random() * Math.max(count, 1)));
     setRevealed(false);
+    setZoomRange(null);
   };
 
   if (!object) {
@@ -572,28 +708,86 @@ export default function Home() {
 
   const selectedLine = spectralLines[lineIndex];
   const observedLine = selectedLine.rest * (1 + object.z);
-  const objectKey = survey === "sdss" ? object.id : (object as DesiObject).targetid;
-  const stampUrl = `${BASE_PATH}/${survey}/stamps/${objectKey}.jpg`;
+  const objectKey =
+    survey === "desi" ? (object as DesiObject).targetid : object.id;
+  const localStampUrl = `${BASE_PATH}/${survey}/stamps/${objectKey}.jpg`;
+  const legacyStampUrl =
+    `https://www.legacysurvey.org/viewer/jpeg-cutout?ra=${object.ra}` +
+    `&dec=${object.dec}&layer=ls-dr10&pixscale=0.262&size=360`;
+  const surveyFallbackStampUrl =
+    survey === "desi"
+      ? localStampUrl
+      : `https://skyserver.sdss.org/dr18/SkyServerWS/ImgCutout/getjpeg?ra=${object.ra}&dec=${object.dec}&scale=0.25&width=360&height=360`;
+  const stampUrl = survey === "sdss" ? localStampUrl : legacyStampUrl;
   const stampSource =
     survey === "sdss"
       ? "SDSS DR18 colour"
-      : (object as DesiObject).imageSource ?? "DES DR2 / fallback imaging";
+      : "Legacy Surveys DR10";
   const objectLabel =
     survey === "sdss"
       ? sdssDesignation(object.ra, object.dec)
-      : `TARGETID ${(object as DesiObject).targetid}`;
+      : survey === "desi"
+        ? `TARGETID ${(object as DesiObject).targetid}`
+        : (object as GamaObject).name;
   const spectrumLabel =
     survey === "sdss"
       ? `spec-${String((object as SdssObject).plate).padStart(4, "0")}-${(object as SdssObject).mjd}-${String((object as SdssObject).fiber).padStart(4, "0")}`
-      : null;
+      : survey === "gama"
+        ? `AAOmega ${(object as GamaObject).id}`
+        : null;
+
+  const adjustExpandedZoom = (factor: number) => {
+    if (!spectrum) return;
+    const prepared = prepareSpectrum(spectrum, frame, object.z);
+    const fullMin = prepared.w[0];
+    const fullMax = prepared.w[prepared.w.length - 1];
+    const currentMin = zoomRange?.[0] ?? fullMin;
+    const currentMax = zoomRange?.[1] ?? fullMax;
+    const featureWave =
+      frame === "rest" ? selectedLine.rest : selectedLine.rest * (1 + object.z);
+    const center =
+      featureWave >= currentMin && featureWave <= currentMax
+        ? featureWave
+        : (currentMin + currentMax) / 2;
+    const width = Math.min(
+      fullMax - fullMin,
+      Math.max(120, (currentMax - currentMin) * factor),
+    );
+    let nextMin = center - width / 2;
+    let nextMax = center + width / 2;
+    if (nextMin < fullMin) {
+      nextMin = fullMin;
+      nextMax = fullMin + width;
+    }
+    if (nextMax > fullMax) {
+      nextMax = fullMax;
+      nextMin = fullMax - width;
+    }
+    setZoomRange([nextMin, nextMax]);
+  };
 
   const downloadCard = async () => {
     if (!spectrum) return;
     setDownloading(true);
     try {
-      const image = new Image();
-      image.src = stampUrl;
-      await image.decode();
+      const loadImage = async (url: string, cors: boolean) => {
+        const candidate = new Image();
+        if (cors) candidate.crossOrigin = "anonymous";
+        candidate.src = url;
+        await Promise.race([
+          candidate.decode(),
+          new Promise((_, reject) =>
+            window.setTimeout(() => reject(new Error("Image load timed out")), 8000),
+          ),
+        ]);
+        return candidate;
+      };
+      let image: HTMLImageElement;
+      try {
+        image = await loadImage(stampUrl, survey !== "sdss");
+      } catch {
+        image = await loadImage(surveyFallbackStampUrl, false);
+      }
       const canvas = document.createElement("canvas");
       canvas.width = 1600;
       canvas.height = 900;
@@ -691,6 +885,9 @@ export default function Home() {
           <button className={survey === "desi" ? "active" : ""} onClick={() => switchSurvey("desi")}>
             DESI DR1 <b>400</b>
           </button>
+          <button className={survey === "gama" ? "active" : ""} onClick={() => switchSurvey("gama")}>
+            GAMA DR4 <b>400</b>
+          </button>
         </div>
         <button className="random-button" onClick={randomise}><span>↝</span> Surprise me</button>
       </header>
@@ -702,13 +899,13 @@ export default function Home() {
         </div>
         <div className="intro-copy">
           <p>
-            Compare 800 class-selected SDSS galaxies with a 400-object DESI DR1
-            sample. Toggle each calibrated spectrum between its observed and
-            rest frames.
+            Explore 800 SDSS, 400 DESI DR1 and 400 GAMA DR4 spectra across
+            nearby galaxy populations and high-redshift systems. Toggle each
+            spectrum between its observed and rest frames.
           </p>
           <div className="instrument-strip">
-            <span>{survey === "sdss" ? "SDSS DR18" : "DESI DR1"}</span>
-            <strong>{survey === "sdss" ? "≈ 3800 — 9200 Å" : "3600 — 9824 Å"}</strong>
+            <span>{survey === "sdss" ? "SDSS DR18" : survey === "desi" ? "DESI DR1" : "GAMA DR4 / AAOmega"}</span>
+            <strong>{survey === "sdss" ? "≈ 3800 — 9200 Å" : survey === "desi" ? "3600 — 9824 Å" : "≈ 3727 — 8858 Å"}</strong>
             <span>Observed-frame coverage</span>
           </div>
         </div>
@@ -736,7 +933,9 @@ export default function Home() {
             <p>
               {survey === "sdss"
                 ? "Pipeline subclasses plus BPT line-ratio and MPA–JHU index selections. These are learning sets, not final physical diagnoses."
-                : "Public DESI DR1 spectra grouped into redshift windows plus quasars. Use this section to see which rest-frame landmarks migrate through the observed band."}
+                : survey === "desi"
+                  ? "Public DESI DR1 spectra grouped into redshift windows plus quasars. Use this section to see which rest-frame landmarks migrate through the observed band."
+                  : "GAMA DR4 best-redshift AAOmega spectra: four-line BPT selections for star-forming, composite and AGN-like systems, plus a strong-D4000 and weak-Hα quenched set."}
             </p>
           </div>
         </aside>
@@ -762,6 +961,15 @@ export default function Home() {
                   <button className={frame === "observed" ? "active" : ""} onClick={() => setFrame("observed")}>Observed frame</button>
                   <button className={frame === "rest" ? "active" : ""} onClick={() => setFrame("rest")}>Rest frame</button>
                 </div>
+                <button
+                  className="expand-spectrum"
+                  onClick={() => {
+                    setZoomRange(null);
+                    setExpanded(true);
+                  }}
+                >
+                  Enlarge &amp; inspect ↗
+                </button>
               </div>
               <SpectrumPlot
                 spectrum={spectrum}
@@ -777,17 +985,62 @@ export default function Home() {
 
             <aside className="postage-card">
               <div className="stamp-wrap">
-                <img src={stampUrl} alt={`Colour image of the selected ${group.name} object`} />
+                <StampImage
+                  key={`${survey}-${objectKey}`}
+                  primaryUrl={stampUrl}
+                  fallbackUrl={surveyFallbackStampUrl}
+                  useCors={survey !== "sdss"}
+                  alt={`Colour image of the selected ${group.name} object`}
+                />
                 <div className="crosshair" /><span className="north">N</span><span className="east">E</span>
               </div>
               <div className="coordinates">
                 <span>RA {object.ra.toFixed(5)}°</span>
                 <span>DEC {object.dec >= 0 ? "+" : ""}{object.dec.toFixed(5)}°</span>
               </div>
-              <div className="stamp-source">{stampSource}</div>
+              <div className="stamp-source">{stampSource}{survey !== "sdss" && " · automatic survey fallback"}</div>
               <div className="stamp-caption"><span style={{ color: group.color }}>{group.short}</span><p>{group.lesson}</p></div>
             </aside>
           </div>
+
+          <dialog
+            ref={spectrumDialog}
+            className="spectrum-dialog"
+            onClose={() => setExpanded(false)}
+          >
+            <div className="expanded-head">
+              <div>
+                <span>{survey.toUpperCase()} · {objectLabel}</span>
+                <strong>{group.name} spectrum</strong>
+              </div>
+              <button onClick={() => setExpanded(false)} aria-label="Close enlarged spectrum">Close ×</button>
+            </div>
+            <div className="expanded-controls">
+              <div className="frame-switch">
+                <button className={frame === "observed" ? "active" : ""} onClick={() => { setFrame("observed"); setZoomRange(null); }}>Observed frame</button>
+                <button className={frame === "rest" ? "active" : ""} onClick={() => { setFrame("rest"); setZoomRange(null); }}>Rest frame</button>
+              </div>
+              <div className="zoom-buttons">
+                <button onClick={() => adjustExpandedZoom(0.6)}>Zoom in</button>
+                <button onClick={() => adjustExpandedZoom(1.65)}>Zoom out</button>
+                <button onClick={() => setZoomRange(null)}>Full range</button>
+              </div>
+            </div>
+            <SpectrumPlot
+              spectrum={spectrum}
+              frame={frame}
+              z={object.z}
+              lineIndex={lineIndex}
+              onLine={setLineIndex}
+              color={group.color}
+              survey={survey}
+              objectLabel={objectLabel}
+              xRange={zoomRange}
+              onZoomRange={setZoomRange}
+              interactive
+            />
+            <p className="expanded-hint">Drag across a wavelength interval or use the mouse wheel to zoom. Double-click to restore the full range.</p>
+          </dialog>
 
           <div className="object-navigation">
             <button onClick={() => step(-1)} aria-label="Previous object">←</button>
@@ -797,7 +1050,10 @@ export default function Home() {
                 min="0"
                 max={Math.max(objects.length - 1, 0)}
                 value={index}
-                onChange={(event) => setIndex(Number(event.target.value))}
+                onChange={(event) => {
+                  setIndex(Number(event.target.value));
+                  setZoomRange(null);
+                }}
                 style={{ "--accent": group.color } as React.CSSProperties}
               />
               <span>{String(index + 1).padStart(2, "0")} / {objects.length}</span>
@@ -816,7 +1072,15 @@ export default function Home() {
             <dl>
               <div><dt>REST</dt><dd>{selectedLine.rest} Å</dd></div>
               <div><dt>OBSERVED</dt><dd>{observedLine.toFixed(0)} Å</dd></div>
-              <div><dt>IN SURVEY BAND?</dt><dd>{observedLine >= (survey === "sdss" ? 3800 : 3600) && observedLine <= (survey === "sdss" ? 9200 : 9824) ? "YES" : "NO"}</dd></div>
+              <div>
+                <dt>IN SURVEY BAND?</dt>
+                <dd>
+                  {observedLine >= (survey === "desi" ? 3600 : survey === "gama" ? 3727 : 3800) &&
+                  observedLine <= (survey === "desi" ? 9824 : survey === "gama" ? 8858 : 9200)
+                    ? "YES"
+                    : "NO"}
+                </dd>
+              </div>
             </dl>
           </div>
           <div className="line-chips">
@@ -856,6 +1120,14 @@ export default function Home() {
               <BptPlot rows={sdss} selected={object as SdssObject} color={group.color} />
               <MainSequencePlot rows={sdss} selected={object as SdssObject} color={group.color} />
             </>
+          ) : survey === "gama" ? (
+            <>
+              <BptPlot rows={gama} selected={object as GamaObject} color={group.color} />
+              <DiagnosticUnavailable
+                title="Stellar main sequence"
+                note="The GAMA spectra and line measurements are in place. A single, survey-consistent stellar-mass and SFR value-added selection will be added before showing this population diagram."
+              />
+            </>
           ) : (
             <>
               <DiagnosticUnavailable
@@ -880,11 +1152,12 @@ export default function Home() {
       </section>
 
       <footer>
-        <div><strong>LINE / ATLAS</strong><span>Learn galaxy spectra with SDSS and DESI</span></div>
-        <p>Spectra: SDSS DR18 and DESI DR1. Postage stamps: SDSS DR18 and DES DR2, with fallback imaging where those footprints do not overlap. Class selections are educational guides, not definitive diagnoses.</p>
+        <div><strong>LINE / ATLAS</strong><span>Learn galaxy spectra with SDSS, DESI and GAMA</span></div>
+        <p>Spectra: SDSS DR18, DESI DR1 and GAMA DR4. Postage stamps: SDSS DR18 and Legacy Surveys DR10. Class selections are educational guides, not definitive diagnoses.</p>
         <div className="footer-links">
           <a href="https://skyserver.sdss.org/dr18/" target="_blank" rel="noreferrer">SDSS ↗</a>
           <a href="https://data.desi.lbl.gov/doc/releases/dr1/" target="_blank" rel="noreferrer">DESI DR1 ↗</a>
+          <a href="https://www.gama-survey.org/dr4/" target="_blank" rel="noreferrer">GAMA DR4 ↗</a>
         </div>
       </footer>
     </main>

@@ -1,7 +1,7 @@
 # Line / Atlas
 
 An interactive visual field guide for learning to read galaxy spectra, built
-around real SDSS DR18 and DESI DR1 examples.
+around real SDSS DR18, DESI DR1 and GAMA DR4 examples.
 
 ## Explore
 
@@ -20,10 +20,15 @@ The DESI section adds 400 spectra across four redshift/spectral teaching
 families: nearby galaxies, intermediate-redshift galaxies, high-redshift
 galaxies, and quasars.
 
+The GAMA section adds 400 unique AAOmega spectra: 100 each in star-forming,
+composite, AGN-like and quenched teaching sets.
+
 Each example combines a numerical calibrated spectrum, colour postage stamp,
 redshift-aware line annotations, a short interpretation exercise, and a
 downloadable PNG study card. The spectrum view shows the rebinned measurements
-as a light trace and a Gaussian-smoothed visual guide as a dark trace.
+as a light trace and a Gaussian-smoothed visual guide as a dark trace. The
+enlarged view supports wavelength-range dragging, mouse-wheel zoom, direct
+line selection and observed/rest-frame switching.
 
 The frame control performs a flux-conserving transformation rather than merely
 relabeling the horizontal axis. For the rest-frame display:
@@ -47,6 +52,9 @@ For SDSS objects, the atlas also shows the selected galaxy on:
   [N II] λ6584 line fluxes; and
 - the stellar mass–SFR plane, using the MPA–JHU median total stellar mass and
   total SFR estimates.
+
+For GAMA objects, the atlas shows the selected galaxy on the same [N II] BPT
+plane using the GAMA `GaussFitSimplev05` line measurements.
 
 ## Run locally
 
@@ -73,15 +81,21 @@ python -m pip install -r scripts/requirements.txt
 python scripts/build-science-data.py
 ```
 
-This queries the public SDSS SkyServer/SAS and NOIRLab SPARCL services, then
-writes the compact catalogues, numerical flux arrays, and postage stamps under
-`public/`.
+This queries the public SDSS SkyServer/SAS, NOIRLab SPARCL and GAMA DR4
+services, then writes the compact catalogues, numerical flux arrays, and local
+survey-image fallbacks under `public/`.
 
 To refresh only the SDSS diagnostic measurements after changing the BPT or
 mass–SFR presentation, run:
 
 ```bash
 python scripts/build-science-data.py sdss-diagnostics
+```
+
+To refresh the GAMA catalogue and spectra without downloading image cutouts:
+
+```bash
+python scripts/build-science-data.py gama-data
 ```
 
 ## SDSS sample construction
@@ -157,6 +171,36 @@ retrieved from the DESI DR1 dataset. A homogeneous DESI line-flux and
 stellar-population value-added catalogue has not been attached, so the site
 does not claim BPT or mass–SFR positions for DESI objects.
 
+## GAMA sample construction
+
+The GAMA teaching sample comes from GAMA DR4. Spectra are required to have:
+
+- `SURVEY = 'GAMA'`, so the spectrum was obtained by GAMA with
+  AAT/AAOmega rather than inherited from another survey;
+- normalised redshift quality `NQ > 2`;
+- `IS_BEST = 1`; and
+- `0.02 < z < 0.25`.
+
+`GaussFitSimplev05` supplies the continuum S/N, narrow D4000 measurement and
+emission-line fits. It is joined to `SpecAllv27` by `SPECID` to obtain the GAMA
+name and released spectrum URL. Candidates are ordered by continuum S/N.
+Previously used `SPECID` values are excluded as each class is assembled, so
+the 400 category placements are 400 unique spectra.
+
+The exact teaching cuts are:
+
+| Class | Exact selection |
+| --- | --- |
+| Star-forming | Hα, Hβ, [O III] λ5007 and [N II] λ6584 are positive and each has S/N > 5; `−2 < x < 0.5`, `−1.5 < y < 1.5`; below `y = 0.61/(x − 0.05) + 1.3`. |
+| Composite | The same four-line quality and x/y bounds; on or above the Kauffmann curve and below `y = 0.61/(x − 0.47) + 1.19`. |
+| AGN-like | The same four-line quality and x/y bounds; on or above the Kewley curve. |
+| Quenched | Continuum S/N > 8, narrow D4000 > 1.7 and `|EW(Hα)| < 3 Å`. |
+
+Here `x = log10([N II] λ6584/Hα)` and
+`y = log10([O III] λ5007/Hβ)`. These are transparent learning selections, not
+a replacement for the complete GAMA selection function or a definitive
+classification of each galaxy.
+
 ## Spectrum and image processing
 
 Only pixels with finite wavelength and flux, positive inverse variance and
@@ -165,13 +209,16 @@ Only pixels with finite wavelength and flux, positive inverse variance and
 legible browser rendering. The displayed flux values therefore preserve line
 patterns but are not intended for precision remeasurement.
 
-SDSS spectra come from the DR18-hosted legacy `spec-lite` FITS products. SDSS
-postage stamps use the DR18 Image Cutout service. For DESI objects inside the
-DES footprint, the pipeline retrieves DES DR2 g/r/i coadd cutouts through the
-NOIRLab Simple Image Access service and builds a Lupton colour composite at
-360 × 360 pixels. Objects without complete DES band coverage use SDSS colour
-imaging where available, then NASA SkyView DSS2 Red as the final fallback. The
-catalogue records the image source for every DESI object.
+SDSS spectra come from the DR18-hosted legacy `spec-lite` FITS products. GAMA
+AAOmega spectra come from the DR4 `reduced_27/1d` FITS products; row 1 is the
+calibrated flux density, row 2 is its 1σ error, and the wavelength grid is
+reconstructed from the FITS WCS.
+
+SDSS postage stamps use the DR18 Image Cutout service. DESI and GAMA objects
+use the official Legacy Surveys DR10 JPEG cutout service with the survey's own
+colour rendering at 0.262 arcsec per pixel. This replaces the earlier locally
+constructed DES `i/r/g` composites, which had an excessively red colour
+balance. Existing local DESI stamps remain only as a network fallback.
 
 The samples are designed for visual pattern-recognition practice. They are not
 volume-limited, statistically representative, or definitive physical diagnoses
@@ -182,7 +229,8 @@ for individual systems.
 SDSS spectra, classifications and imaging are from
 [Sloan Digital Sky Survey DR18](https://www.sdss.org/dr18/). DESI spectra are
 from [DESI Data Release 1](https://data.desi.lbl.gov/doc/releases/dr1/) via
-[NOIRLab SPARCL](https://sparclclient.readthedocs.io/). DES colour imaging is
-from [DES DR2 through NOIRLab Data Lab](https://datalab.noirlab.edu/data/dark-energy-survey).
-Postage stamps outside both DES and SDSS coverage use
-[NASA SkyView](https://skyview.gsfc.nasa.gov/) DSS2 imaging.
+[NOIRLab SPARCL](https://sparclclient.readthedocs.io/). GAMA spectra, redshifts
+and line measurements are from
+[GAMA Data Release 4](https://www.gama-survey.org/dr4/). DESI and GAMA colour
+cutouts are from
+[DESI Legacy Imaging Surveys DR10](https://www.legacysurvey.org/dr10/description/).

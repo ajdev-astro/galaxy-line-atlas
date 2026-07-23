@@ -366,6 +366,57 @@ export const desiFamilies = [
   },
 ] as const;
 
+export const gamaFamilies = [
+  {
+    id: "star-forming",
+    short: "SF",
+    name: "Star-forming",
+    color: "#45d5c5",
+    signal: "Below the Kauffmann BPT curve",
+    lesson:
+      "These high-quality GAMA spectra sit on the H II-region sequence. Compare the Balmer peaks with [O III] and [N II] as metallicity and ionisation change.",
+    question: "What keeps these galaxies on the star-forming BPT branch?",
+    answer: "Their four-line ratios are consistent with gas ionised predominantly by young massive stars.",
+    lookFor: ["Hα", "Hβ", "[O III]", "[N II]"],
+  },
+  {
+    id: "composite",
+    short: "CO",
+    name: "Composite",
+    color: "#f0bc62",
+    signal: "Between Kauffmann and Kewley BPT curves",
+    lesson:
+      "Composite spectra occupy the transition zone between the star-forming sequence and harder ionisation. The classification comes from ratios, not one conspicuous line.",
+    question: "Why is the BPT position essential for this group?",
+    answer: "No single line proves a mixed ionising source; the relative strengths of all four BPT lines define the transition region.",
+    lookFor: ["[N II]/Hα", "[O III]/Hβ", "narrow lines", "ratios"],
+  },
+  {
+    id: "agn",
+    short: "AGN",
+    name: "AGN-like",
+    color: "#ff6e7f",
+    signal: "Above the Kewley BPT curve",
+    lesson:
+      "A hard ionising spectrum drives these GAMA galaxies above the theoretical starburst boundary. [O III] and [N II] are often enhanced relative to the Balmer lines.",
+    question: "What distinguishes this group from the star-forming branch?",
+    answer: "Its BPT ratios require a harder ionising field than ordinary H II regions can readily provide.",
+    lookFor: ["[O III]", "[N II]", "Hβ", "hard ionisation"],
+  },
+  {
+    id: "quenched",
+    short: "QU",
+    name: "Quenched",
+    color: "#c7c3b8",
+    signal: "D4000 > 1.7 and |EW(Hα)| < 3 Å",
+    lesson:
+      "These spectra combine a strong 4000 Å break with very weak Hα. Stellar absorption features dominate because little current star formation is visible.",
+    question: "Which two measurements define this teaching set?",
+    answer: "A strong narrow 4000 Å break and Hα equivalent width close to zero.",
+    lookFor: ["D4000", "Ca H+K", "G band", "weak Hα"],
+  },
+] as const;
+
 export const spectralLines = [
   { name: "Lyα", rest: 1215.67, kind: "emission", note: "Strong rest-UV line; a key landmark for high-redshift systems" },
   { name: "C IV", rest: 1549, kind: "emission", note: "Broad high-ionisation quasar line" },
