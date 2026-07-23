@@ -126,6 +126,10 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--cyan); outline-
   display: block; color: #747874; font: 9px var(--font-geist-mono), monospace; letter-spacing: .13em; margin-bottom: 7px;
 }
 .object-id strong, .redshift strong { font: 500 12px var(--font-geist-mono), monospace; }
+.object-id small {
+  display: block; margin-top: 5px; color: #777b77;
+  font: 9px var(--font-geist-mono), monospace; letter-spacing: .02em;
+}
 .redshift strong { color: var(--accent, var(--cyan)); }
 .evidence-grid { display: grid; grid-template-columns: minmax(0, 1fr) 282px; gap: 14px; }
 .spectrum-card, .postage-card { background: #141718; border: 1px solid #303434; }
@@ -142,10 +146,9 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--cyan); outline-
 .plot-grid { stroke: #e8e8e8; stroke-width: 1; }
 .plot-axis, .plot-frame { stroke: #151718; stroke-width: 1.4; }
 .plot-header { fill: #101314; font: 600 16px var(--font-geist-mono), monospace; }
-.plot-subheader { fill: #6b6d69; font: 12px var(--font-geist-mono), monospace; }
-.plot-tick { fill: #272a28; font: 12px var(--font-geist-mono), monospace; }
-.plot-axis-label { fill: #101314; font: 600 14px var(--font-geist-mono), monospace; }
-.feature-label { font: 600 11px var(--font-geist-mono), monospace; }
+.plot-tick { fill: #161918; font: 500 17px var(--font-geist-mono), monospace; }
+.plot-axis-label { fill: #101314; font: 600 17px var(--font-geist-mono), monospace; }
+.feature-label { font: 600 13px var(--font-geist-mono), monospace; }
 .raw-spectrum {
   fill: none; stroke: #c3c7c7; stroke-width: 1.05; opacity: .78;
   vector-effect: non-scaling-stroke;
@@ -154,12 +157,6 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--cyan); outline-
   fill: none; stroke: #111314; stroke-width: 2.15;
   vector-effect: non-scaling-stroke;
 }
-.spectrum-method {
-  min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 18px;
-  padding: 10px 14px; border-top: 1px solid #333737; color: #91958f;
-  font: 9px/1.45 var(--font-geist-mono), monospace;
-}
-.spectrum-method a { color: #c3c6bf; white-space: nowrap; text-decoration: none; border-bottom: 1px solid #555a56; }
 .plot-loading {
   min-height: 430px; display: grid; place-items: center; background: #f4f1e8;
   color: #77776f; font: 10px var(--font-geist-mono), monospace;
