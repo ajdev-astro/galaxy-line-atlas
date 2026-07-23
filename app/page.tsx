@@ -33,6 +33,7 @@ type DesiObject = {
   dec: number;
   z: number;
   family: string;
+  imageSource?: string;
 };
 type AtlasObject = SdssObject | DesiObject;
 type Spectrum = { w: number[]; f: number[] };
@@ -46,50 +47,149 @@ const scale = (
 ) => targetMin + ((value - sourceMin) / (sourceMax - sourceMin)) * (targetMax - targetMin);
 
 function quantile(values: number[], q: number) {
-  const sorted = [...values].sort((a, b) => a - b);
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
   return sorted[Math.floor((sorted.length - 1) * q)] ?? 0;
 }
 
-function pathForSpectrum(
+function binEdges(wavelengths: number[]) {
+  if (wavelengths.length < 2) return [];
+  const edges = new Array(wavelengths.length + 1);
+  edges[0] = wavelengths[0] - (wavelengths[1] - wavelengths[0]) / 2;
+  for (let index = 1; index < wavelengths.length; index += 1) {
+    edges[index] = (wavelengths[index - 1] + wavelengths[index]) / 2;
+  }
+  edges[wavelengths.length] =
+    wavelengths[wavelengths.length - 1] +
+    (wavelengths[wavelengths.length - 1] - wavelengths[wavelengths.length - 2]) / 2;
+  return edges;
+}
+
+function fluxConservingRebin(sourceWavelength: number[], sourceFlux: number[], targetWavelength: number[]) {
+  const sourceEdges = binEdges(sourceWavelength);
+  const targetEdges = binEdges(targetWavelength);
+  const rebinned = new Array(targetWavelength.length).fill(Number.NaN);
+  let sourceIndex = 0;
+  for (let targetIndex = 0; targetIndex < targetWavelength.length; targetIndex += 1) {
+    const left = targetEdges[targetIndex];
+    const right = targetEdges[targetIndex + 1];
+    while (sourceIndex < sourceFlux.length && sourceEdges[sourceIndex + 1] <= left) {
+      sourceIndex += 1;
+    }
+    let cursor = sourceIndex;
+    let integral = 0;
+    let coverage = 0;
+    while (cursor < sourceFlux.length && sourceEdges[cursor] < right) {
+      const overlap = Math.max(
+        0,
+        Math.min(right, sourceEdges[cursor + 1]) - Math.max(left, sourceEdges[cursor]),
+      );
+      if (overlap > 0 && Number.isFinite(sourceFlux[cursor])) {
+        integral += sourceFlux[cursor] * overlap;
+        coverage += overlap;
+      }
+      cursor += 1;
+    }
+    if (coverage > 0.8 * (right - left)) rebinned[targetIndex] = integral / coverage;
+  }
+  return rebinned;
+}
+
+function gaussianSmooth(values: number[], sigma = 2.4) {
+  const radius = Math.ceil(sigma * 4);
+  const weights = Array.from(
+    { length: radius * 2 + 1 },
+    (_, index) => Math.exp(-0.5 * ((index - radius) / sigma) ** 2),
+  );
+  return values.map((_, index) => {
+    let total = 0;
+    let weight = 0;
+    for (let offset = -radius; offset <= radius; offset += 1) {
+      const value = values[index + offset];
+      if (!Number.isFinite(value)) continue;
+      const kernel = weights[offset + radius];
+      total += value * kernel;
+      weight += kernel;
+    }
+    return weight ? total / weight : Number.NaN;
+  });
+}
+
+type PreparedSpectrum = Spectrum & { smooth: number[] };
+
+function prepareSpectrum(
   spectrum: Spectrum,
   frame: "observed" | "rest",
   z: number,
-  width = 1000,
-  height = 430,
 ) {
-  if (!spectrum.w.length) return "";
-  const wavelengths = spectrum.w.map((value) =>
-    frame === "rest" ? value / (1 + z) : value,
+  const factor = frame === "rest" ? 1 + z : 1;
+  const sourceWavelength = spectrum.w.map((value) => value / factor);
+  // f_lambda d_lambda is conserved: compressing wavelength by (1+z)
+  // requires multiplying the flux density by the same factor.
+  const sourceFlux = spectrum.f.map((value) => value * factor);
+  const count = Math.min(1600, sourceWavelength.length);
+  const sourceEdges = binEdges(sourceWavelength);
+  const min = sourceEdges[0];
+  const max = sourceEdges[sourceEdges.length - 1];
+  const width = (max - min) / count;
+  const targetWavelength = Array.from(
+    { length: count },
+    (_, index) => min + (index + 0.5) * width,
   );
+  const rebinnedFlux = fluxConservingRebin(sourceWavelength, sourceFlux, targetWavelength);
+  return {
+    w: targetWavelength,
+    f: rebinnedFlux,
+    smooth: gaussianSmooth(rebinnedFlux),
+  };
+}
+
+function plotBounds(spectrum: PreparedSpectrum) {
+  const low = quantile(spectrum.f, 0.01);
+  const high = quantile(spectrum.f, 0.995);
+  const padding = Math.max((high - low) * 0.08, 0.01);
+  return { yMin: low - padding, yMax: high + padding };
+}
+
+function pathForSeries(
+  wavelengths: number[],
+  flux: number[],
+  yMin: number,
+  yMax: number,
+  width = 1100,
+  height = 650,
+) {
   const xMin = wavelengths[0];
   const xMax = wavelengths[wavelengths.length - 1];
-  const yMin = quantile(spectrum.f, 0.02);
-  const yMax = quantile(spectrum.f, 0.98);
-  const span = Math.max(yMax - yMin, 0.001);
+  const left = 95;
+  const right = width - 35;
+  const top = 105;
+  const bottom = height - 85;
+  let started = false;
   return wavelengths
     .map((wave, index) => {
-      const x = 28 + ((wave - xMin) / (xMax - xMin)) * (width - 56);
-      const y = height - 28 - ((spectrum.f[index] - yMin) / span) * (height - 58);
-      return `${index ? "L" : "M"}${x.toFixed(1)},${Math.max(18, Math.min(height - 18, y)).toFixed(1)}`;
+      if (!Number.isFinite(flux[index])) {
+        started = false;
+        return "";
+      }
+      const x = scale(wave, xMin, xMax, left, right);
+      const y = scale(Math.max(yMin, Math.min(yMax, flux[index])), yMin, yMax, bottom, top);
+      const command = started ? "L" : "M";
+      started = true;
+      return `${command}${x.toFixed(1)},${y.toFixed(1)}`;
     })
     .join(" ");
 }
 
-function lineX(
-  rest: number,
-  frame: "observed" | "rest",
-  z: number,
-  spectrum: Spectrum,
-  width = 1000,
-) {
-  if (!spectrum.w.length) return -1;
-  const xMin = frame === "rest" ? spectrum.w[0] / (1 + z) : spectrum.w[0];
-  const xMax =
-    frame === "rest"
-      ? spectrum.w[spectrum.w.length - 1] / (1 + z)
-      : spectrum.w[spectrum.w.length - 1];
+function lineX(rest: number, frame: "observed" | "rest", z: number, spectrum: PreparedSpectrum) {
   const wave = frame === "rest" ? rest : rest * (1 + z);
-  return 28 + ((wave - xMin) / (xMax - xMin)) * (width - 56);
+  return scale(wave, spectrum.w[0], spectrum.w[spectrum.w.length - 1], 95, 1065);
+}
+
+function formatFlux(value: number) {
+  if (Math.abs(value) >= 100 || (Math.abs(value) > 0 && Math.abs(value) < 0.1)) {
+    return value.toExponential(1);
+  }
+  return value.toFixed(Math.abs(value) < 10 ? 1 : 0);
 }
 
 function SpectrumPlot({
@@ -99,6 +199,8 @@ function SpectrumPlot({
   lineIndex,
   onLine,
   color,
+  survey,
+  objectLabel,
 }: {
   spectrum: Spectrum | null;
   frame: "observed" | "rest";
@@ -106,45 +208,64 @@ function SpectrumPlot({
   lineIndex: number;
   onLine: (index: number) => void;
   color: string;
+  survey: Survey;
+  objectLabel: string;
 }) {
   if (!spectrum) {
     return <div className="plot-loading">Loading calibrated flux…</div>;
   }
-  const path = pathForSpectrum(spectrum, frame, z);
-  const min =
-    frame === "rest" ? spectrum.w[0] / (1 + z) : spectrum.w[0];
-  const max =
-    frame === "rest"
-      ? spectrum.w[spectrum.w.length - 1] / (1 + z)
-      : spectrum.w[spectrum.w.length - 1];
+  const prepared = prepareSpectrum(spectrum, frame, z);
+  const { yMin, yMax } = plotBounds(prepared);
+  const rawPath = pathForSeries(prepared.w, prepared.f, yMin, yMax);
+  const smoothPath = pathForSeries(prepared.w, prepared.smooth, yMin, yMax);
+  const min = prepared.w[0];
+  const max = prepared.w[prepared.w.length - 1];
+  const xTicks = Array.from({ length: 7 }, (_, index) => min + ((max - min) * index) / 6);
+  const yTicks = Array.from({ length: 5 }, (_, index) => yMin + ((yMax - yMin) * index) / 4);
   return (
     <div className="science-plot">
-      <svg viewBox="0 0 1000 430" role="img" aria-label={`${frame}-frame flux spectrum`}>
+      <svg viewBox="0 0 1100 650" role="img" aria-labelledby="spectrum-title spectrum-description">
+        <title id="spectrum-title">{`${survey.toUpperCase()} ${frame}-frame spectrum for ${objectLabel}`}</title>
+        <desc id="spectrum-description">
+          The light grey line is the rebinned measured flux density. The dark line is a Gaussian-smoothed guide. Spectral features are labelled at their redshift-aware wavelengths.
+        </desc>
         <defs>
-          <linearGradient id="plotFade" x1="0" x2="1">
-            <stop offset="0" stopColor="#512884" />
-            <stop offset=".32" stopColor="#2a809a" />
-            <stop offset=".58" stopColor="#6f9838" />
-            <stop offset=".8" stopColor="#c56a2d" />
-            <stop offset="1" stopColor="#8e2332" />
-          </linearGradient>
+          <clipPath id="spectrum-clip"><rect x="95" y="105" width="970" height="460" /></clipPath>
         </defs>
-        <rect width="1000" height="430" fill="#f4f1e8" />
-        {[0, 1, 2, 3, 4].map((tick) => (
-          <line
-            key={tick}
-            x1="28"
-            x2="972"
-            y1={35 + tick * 88}
-            y2={35 + tick * 88}
-            stroke="#d8d4c9"
-            strokeWidth="1"
-          />
+        <rect width="1100" height="650" fill="#fff" />
+        <text x="95" y="31" className="plot-header">
+          Survey: {survey.toUpperCase()} · Object: {objectLabel}
+        </text>
+        <text x="95" y="55" className="plot-header">
+          z = {z.toFixed(5)} · {frame === "observed" ? "observed-frame calibrated flux density" : "flux-conserving rest-frame rebin"}
+        </text>
+        <text x="95" y="78" className="plot-subheader">
+          Light: rebinned data · Dark: Gaussian-smoothed guide
+        </text>
+        {xTicks.map((tick) => (
+          <g key={`x-${tick}`}>
+            <line x1={scale(tick, min, max, 95, 1065)} x2={scale(tick, min, max, 95, 1065)} y1="105" y2="565" className="plot-grid" />
+            <line x1={scale(tick, min, max, 95, 1065)} x2={scale(tick, min, max, 95, 1065)} y1="565" y2="573" className="plot-axis" />
+            <text x={scale(tick, min, max, 95, 1065)} y="594" textAnchor="middle" className="plot-tick">{tick.toFixed(0)}</text>
+          </g>
         ))}
+        {yTicks.map((tick) => (
+          <g key={`y-${tick}`}>
+            <line x1="95" x2="1065" y1={scale(tick, yMin, yMax, 565, 105)} y2={scale(tick, yMin, yMax, 565, 105)} className="plot-grid" />
+            <line x1="87" x2="95" y1={scale(tick, yMin, yMax, 565, 105)} y2={scale(tick, yMin, yMax, 565, 105)} className="plot-axis" />
+            <text x="80" y={scale(tick, yMin, yMax, 565, 105) + 4} textAnchor="end" className="plot-tick">{formatFlux(tick)}</text>
+          </g>
+        ))}
+        <rect x="95" y="105" width="970" height="460" fill="none" className="plot-frame" />
+        <g clipPath="url(#spectrum-clip)">
+          <path d={rawPath} className="raw-spectrum" />
+          <path d={smoothPath} className="smooth-spectrum" />
+        </g>
         {spectralLines.map((line, index) => {
-          const x = lineX(line.rest, frame, z, spectrum);
-          if (x < 28 || x > 972) return null;
+          const x = lineX(line.rest, frame, z, prepared);
+          if (x < 95 || x > 1065) return null;
           const active = index === lineIndex;
+          const featureColor = line.kind === "absorption" ? "#c83e35" : "#285fce";
           return (
             <g
               key={`${line.name}-${line.rest}`}
@@ -154,34 +275,30 @@ function SpectrumPlot({
               <line
                 x1={x}
                 x2={x}
-                y1="20"
-                y2="402"
-                stroke={active ? color : "#a8a49a"}
-                strokeWidth={active ? 3 : 1}
-                strokeDasharray={active ? undefined : "4 5"}
+                y1={active ? 105 : 112 + (index % 3) * 18}
+                y2={active ? 565 : 145 + (index % 3) * 18}
+                stroke={active ? color : featureColor}
+                strokeWidth={active ? 2.5 : 1.5}
+                opacity={active ? 1 : 0.9}
               />
+              {active && <rect x={x - 30} y="86" width="60" height="21" rx="2" fill={color} />}
               <text
-                x={x + 5}
-                y={active ? 34 : 48 + (index % 3) * 16}
-                fill={active ? "#111" : "#6e6b64"}
-                fontSize={active ? 15 : 11}
-                fontWeight={active ? 700 : 500}
+                x={active ? x : x + 4}
+                y={active ? 101 : 108 + (index % 3) * 18}
+                textAnchor={active ? "middle" : "start"}
+                fill={active ? "#fff" : featureColor}
+                className="feature-label"
               >
                 {line.name}
               </text>
             </g>
           );
         })}
-        <path d={path} fill="none" stroke="#101314" strokeWidth="1.5" />
-        <rect x="28" y="405" width="944" height="7" fill="url(#plotFade)" />
-        <text x="28" y="426" fill="#575a55" fontSize="12">
-          {min.toFixed(0)} Å
+        <text x="580" y="630" textAnchor="middle" className="plot-axis-label">
+          {frame === "observed" ? "Observed wavelength" : "Rest-frame wavelength"} (Å)
         </text>
-        <text x="500" y="426" textAnchor="middle" fill="#575a55" fontSize="12">
-          {frame === "observed" ? "OBSERVED WAVELENGTH" : "REST WAVELENGTH"}
-        </text>
-        <text x="972" y="426" textAnchor="end" fill="#575a55" fontSize="12">
-          {max.toFixed(0)} Å
+        <text x="24" y="335" textAnchor="middle" transform="rotate(-90 24 335)" className="plot-axis-label">
+          {frame === "rest" ? "(1 + z) fλ" : "fλ"} (10⁻¹⁷ erg s⁻¹ cm⁻² Å⁻¹)
         </text>
       </svg>
     </div>
@@ -422,6 +539,10 @@ export default function Home() {
   const observedLine = selectedLine.rest * (1 + object.z);
   const objectKey = survey === "sdss" ? object.id : (object as DesiObject).targetid;
   const stampUrl = `${BASE_PATH}/${survey}/stamps/${objectKey}.jpg`;
+  const stampSource =
+    survey === "sdss"
+      ? "SDSS DR18 colour"
+      : (object as DesiObject).imageSource ?? "DES DR2 / fallback imaging";
   const objectLabel =
     survey === "sdss"
       ? `${(object as SdssObject).plate}–${(object as SdssObject).mjd}–${String((object as SdssObject).fiber).padStart(4, "0")}`
@@ -446,35 +567,44 @@ export default function Home() {
       ctx.fillStyle = group.color;
       ctx.font = "600 22px monospace";
       ctx.fillText(`${survey.toUpperCase()} · ${group.name.toUpperCase()}`, 62, 118);
-      ctx.fillStyle = "#f4f1e8";
+      ctx.fillStyle = "#ffffff";
       ctx.fillRect(60, 155, 1090, 620);
-      const path = pathForSpectrum(spectrum, frame, object.z, 1020, 520);
-      const points = path.match(/[ML]([\d.]+),([\d.]+)/g) ?? [];
-      ctx.save();
-      ctx.translate(92, 190);
-      ctx.strokeStyle = "#151718";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      points.forEach((point, i) => {
-        const [, xs, ys] = point.match(/[ML]([\d.]+),([\d.]+)/)!;
-        if (i === 0) ctx.moveTo(+xs, +ys);
-        else ctx.lineTo(+xs, +ys);
-      });
-      ctx.stroke();
+      const prepared = prepareSpectrum(spectrum, frame, object.z);
+      const { yMin, yMax } = plotBounds(prepared);
+      const drawSeries = (values: number[], stroke: string, width: number) => {
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = width;
+        ctx.beginPath();
+        let started = false;
+        prepared.w.forEach((wave, index) => {
+          if (!Number.isFinite(values[index])) {
+            started = false;
+            return;
+          }
+          const x = scale(wave, prepared.w[0], prepared.w[prepared.w.length - 1], 92, 1118);
+          const y = scale(Math.max(yMin, Math.min(yMax, values[index])), yMin, yMax, 735, 190);
+          if (started) ctx.lineTo(x, y);
+          else ctx.moveTo(x, y);
+          started = true;
+        });
+        ctx.stroke();
+      };
+      drawSeries(prepared.f, "#c5c7c7", 1);
+      drawSeries(prepared.smooth, "#111314", 2.5);
       spectralLines.forEach((line) => {
-        const x = lineX(line.rest, frame, object.z, spectrum, 1020);
-        if (x < 28 || x > 992) return;
-        ctx.strokeStyle = `${group.color}99`;
+        const wavelength = frame === "rest" ? line.rest : line.rest * (1 + object.z);
+        const x = scale(wavelength, prepared.w[0], prepared.w[prepared.w.length - 1], 92, 1118);
+        if (x < 92 || x > 1118) return;
+        ctx.strokeStyle = line.kind === "absorption" ? "#c83e35" : "#285fce";
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(x, 15);
-        ctx.lineTo(x, 505);
+        ctx.moveTo(x, 190);
+        ctx.lineTo(x, 225);
         ctx.stroke();
-        ctx.fillStyle = "#555";
+        ctx.fillStyle = ctx.strokeStyle;
         ctx.font = "13px monospace";
-        ctx.fillText(line.name, x + 4, 28);
+        ctx.fillText(line.name, x + 4, 187);
       });
-      ctx.restore();
       ctx.drawImage(image, 1190, 155, 350, 350);
       ctx.strokeStyle = group.color;
       ctx.lineWidth = 4;
@@ -520,7 +650,7 @@ export default function Home() {
             SDSS <b>800</b>
           </button>
           <button className={survey === "desi" ? "active" : ""} onClick={() => switchSurvey("desi")}>
-            DESI DR1 <b>80</b>
+            DESI DR1 <b>400</b>
           </button>
         </div>
         <button className="random-button" onClick={randomise}><span>↝</span> Surprise me</button>
@@ -533,9 +663,9 @@ export default function Home() {
         </div>
         <div className="intro-copy">
           <p>
-            Compare 800 class-selected SDSS galaxies with an 80-object DESI DR1
+            Compare 800 class-selected SDSS galaxies with a 400-object DESI DR1
             sample. Toggle the same calibrated spectrum between observed and
-            rest wavelength to learn what the detector sees—and what the galaxy emitted.
+            a flux-conserving rest-frame grid.
           </p>
           <div className="instrument-strip">
             <span>{survey === "sdss" ? "SDSS DR18" : "DESI DR1"}</span>
@@ -558,7 +688,7 @@ export default function Home() {
               >
                 <span className="category-code">{item.short}</span>
                 <span><strong>{item.name}</strong><small>{item.signal}</small></span>
-                <span className="count">{survey === "sdss" ? 100 : 20}</span>
+                <span className="count">100</span>
               </button>
             ))}
           </nav>
@@ -589,7 +719,11 @@ export default function Home() {
                   <button className={frame === "observed" ? "active" : ""} onClick={() => setFrame("observed")}>Observed frame</button>
                   <button className={frame === "rest" ? "active" : ""} onClick={() => setFrame("rest")}>Rest frame</button>
                 </div>
-                <span>{frame === "observed" ? "What the instrument records" : "Wavelength ÷ (1 + z)"}</span>
+                <span>
+                  {frame === "observed"
+                    ? "Light: data · dark: smoothed guide"
+                    : "Rebinned with fλ,rest = (1 + z) fλ,obs"}
+                </span>
               </div>
               <SpectrumPlot
                 spectrum={spectrum}
@@ -598,7 +732,15 @@ export default function Home() {
                 lineIndex={lineIndex}
                 onLine={setLineIndex}
                 color={group.color}
+                survey={survey}
+                objectLabel={objectLabel}
               />
+              <div className="spectrum-method">
+                {frame === "rest"
+                  ? "Flux-conserving rest frame: λ ÷ (1 + z), fλ × (1 + z), then overlap-integrated onto a uniform grid."
+                  : "The light trace retains the rebinned measurements; the dark trace is a Gaussian-smoothed visual guide, not a model fit."}
+                <a href="https://arxiv.org/abs/1705.05165" target="_blank" rel="noreferrer">Resampling reference ↗</a>
+              </div>
             </div>
 
             <aside className="postage-card">
@@ -610,6 +752,7 @@ export default function Home() {
                 <span>RA {object.ra.toFixed(5)}°</span>
                 <span>DEC {object.dec >= 0 ? "+" : ""}{object.dec.toFixed(5)}°</span>
               </div>
+              <div className="stamp-source">{stampSource}</div>
               <div className="stamp-caption"><span style={{ color: group.color }}>{group.short}</span><p>{group.lesson}</p></div>
             </aside>
           </div>
@@ -696,22 +839,6 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="survey-compare">
-        <div>
-          <p className="eyebrow">One spectrum, two coordinate systems</p>
-          <h2>Observed tells you where.<br />Rest tells you what.</h2>
-        </div>
-        <div className="compare-equation">
-          <span>λ<sub>obs</sub></span><b>=</b><span>λ<sub>rest</sub></span><b>×</b><span>(1 + z)</span>
-        </div>
-        <p>
-          SDSS supplies nearby examples where the familiar optical diagnostic
-          lines often appear together. DESI extends the exercise to higher
-          redshift, where the same rest-frame features slide redward and leave
-          the detector one by one.
-        </p>
-      </section>
-
       <section className="export-panel">
         <div><p className="eyebrow">Turn looking into memory</p><h2>Keep the spectrum.<br />Build your own atlas.</h2></div>
         <p>Export the current numerical spectrum, marked lines, postage stamp, redshift and lesson as a 1600 × 900 PNG study card.</p>
@@ -722,7 +849,7 @@ export default function Home() {
 
       <footer>
         <div><strong>LINE / ATLAS</strong><span>Learn galaxy spectra with SDSS and DESI</span></div>
-        <p>Spectra: SDSS DR18 and DESI DR1. Postage stamps: SDSS DR18, with NASA SkyView DSS2 coverage outside the SDSS footprint. Class selections are educational guides, not definitive diagnoses.</p>
+        <p>Spectra: SDSS DR18 and DESI DR1. Postage stamps: SDSS DR18 and DES DR2, with fallback imaging where those footprints do not overlap. Class selections are educational guides, not definitive diagnoses.</p>
         <div className="footer-links">
           <a href="https://skyserver.sdss.org/dr18/" target="_blank" rel="noreferrer">SDSS ↗</a>
           <a href="https://data.desi.lbl.gov/doc/releases/dr1/" target="_blank" rel="noreferrer">DESI DR1 ↗</a>

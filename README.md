@@ -16,15 +16,30 @@ The SDSS atlas contains 100 examples in each of eight populations:
 - quenched
 - post-starburst
 
-The DESI section adds 80 spectra across four redshift/spectral teaching
+The DESI section adds 400 spectra across four redshift/spectral teaching
 families: nearby galaxies, intermediate-redshift galaxies, high-redshift
 galaxies, and quasars.
 
 Each example combines a numerical calibrated spectrum, colour postage stamp,
 redshift-aware line annotations, a short interpretation exercise, and a
-downloadable PNG study card. The frame control replots the same flux array in
-observed wavelength or rest wavelength, using
-`lambda_rest = lambda_observed / (1 + z)`.
+downloadable PNG study card. The spectrum view shows the rebinned measurements
+as a light trace and a Gaussian-smoothed visual guide as a dark trace.
+
+The frame control performs a flux-conserving transformation rather than merely
+relabeling the horizontal axis. For the rest-frame display:
+
+- `lambda_rest = lambda_observed / (1 + z)`;
+- `f_lambda,rest = (1 + z) f_lambda,observed`; and
+- the transformed bins are integrated by pixel overlap onto a uniform
+  rest-wavelength grid.
+
+This preserves the integral of `f_lambda d_lambda`. It does not apply a
+luminosity-distance correction, so the vertical axis is a conserved-frame flux
+density rather than rest-frame luminosity density. This convention follows
+published rest-frame spectral construction examples and the flux-conserving
+resampling method described by
+[Carnall (2017), SpectRes](https://arxiv.org/abs/1705.05165) and
+[Selsing et al. (2016)](https://doi.org/10.1051/0004-6361/201527096).
 
 For SDSS objects, the atlas also shows the selected galaxy on:
 
@@ -128,13 +143,15 @@ windows:
 
 | Family | SPARCL spectral type | Redshift cut | Count |
 | --- | --- | --- | ---: |
-| Nearby galaxies | `GALAXY` | `0.02 ≤ z ≤ 0.25` | 20 |
-| Intermediate-z galaxies | `GALAXY` | `0.4 ≤ z ≤ 0.8` | 20 |
-| High-z galaxies | `GALAXY` | `0.8 ≤ z ≤ 1.3` | 20 |
-| Quasars | `QSO` | `1.0 ≤ z ≤ 2.5` | 20 |
+| Nearby galaxies | `GALAXY` | `0.02 ≤ z ≤ 0.25` | 100 |
+| Intermediate-z galaxies | `GALAXY` | `0.4 ≤ z ≤ 0.8` | 100 |
+| High-z galaxies | `GALAXY` | `0.8 ≤ z ≤ 1.3` | 100 |
+| Quasars | `QSO` | `1.0 ≤ z ≤ 2.5` | 100 |
 
-SPARCL is asked for up to 500 matching records and the first 20 returned in
-each window are retained. The atlas stores `sparcl_id`, DESI `TARGETID`,
+SPARCL is asked for up to 1,500 matching records in each window. Candidates
+with confirmed DES DR2 g/r/i coadd coverage are placed first, then the list is
+filled in SPARCL return order if fewer than 100 DES-covered objects are
+available. The atlas stores `sparcl_id`, DESI `TARGETID`,
 coordinates, redshift and family. Wavelength, flux and inverse variance are
 retrieved from the DESI DR1 dataset. A homogeneous DESI line-flux and
 stellar-population value-added catalogue has not been attached, so the site
@@ -149,9 +166,12 @@ legible browser rendering. The displayed flux values therefore preserve line
 patterns but are not intended for precision remeasurement.
 
 SDSS spectra come from the DR18-hosted legacy `spec-lite` FITS products. SDSS
-postage stamps use the DR18 Image Cutout service. DESI positions first use the
-same SDSS colour cutout where covered; positions outside the footprint use a
-NASA SkyView DSS2 Red quick-look image.
+postage stamps use the DR18 Image Cutout service. For DESI objects inside the
+DES footprint, the pipeline retrieves DES DR2 g/r/i coadd cutouts through the
+NOIRLab Simple Image Access service and builds a Lupton colour composite at
+360 × 360 pixels. Objects without complete DES band coverage use SDSS colour
+imaging where available, then NASA SkyView DSS2 Red as the final fallback. The
+catalogue records the image source for every DESI object.
 
 The samples are designed for visual pattern-recognition practice. They are not
 volume-limited, statistically representative, or definitive physical diagnoses
@@ -162,6 +182,7 @@ for individual systems.
 SDSS spectra, classifications and imaging are from
 [Sloan Digital Sky Survey DR18](https://www.sdss.org/dr18/). DESI spectra are
 from [DESI Data Release 1](https://data.desi.lbl.gov/doc/releases/dr1/) via
-[NOIRLab SPARCL](https://sparclclient.readthedocs.io/). Postage stamps outside
-the SDSS footprint use [NASA SkyView](https://skyview.gsfc.nasa.gov/) DSS2
-imaging.
+[NOIRLab SPARCL](https://sparclclient.readthedocs.io/). DES colour imaging is
+from [DES DR2 through NOIRLab Data Lab](https://datalab.noirlab.edu/data/dark-energy-survey).
+Postage stamps outside both DES and SDSS coverage use
+[NASA SkyView](https://skyview.gsfc.nasa.gov/) DSS2 imaging.
