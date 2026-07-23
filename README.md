@@ -62,6 +62,13 @@ This queries the public SDSS SkyServer/SAS and NOIRLab SPARCL services, then
 writes the compact catalogues, numerical flux arrays, and postage stamps under
 `public/`.
 
+To refresh only the SDSS diagnostic measurements after changing the BPT or
+mass–SFR presentation, run:
+
+```bash
+python scripts/build-science-data.py sdss-diagnostics
+```
+
 ## SDSS sample construction
 
 ### Catalogues and common quality cuts
