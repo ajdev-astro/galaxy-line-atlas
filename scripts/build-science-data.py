@@ -684,12 +684,15 @@ GAMA_BASE_SELECT = """
     SELECT
       g.SPECID AS id, g.CATAID AS cataid, g.RA AS ra, g.`DEC` AS declination,
       g.Z AS redshift, s.GAMA_NAME AS gama_name, s.URL AS spectrum_url,
+      m.uberID AS uber_id,
       g.SN AS continuum_sn, g.D4000N AS d4000,
       LOG10(g.NIIR_FLUX/g.HA_FLUX) AS bpt_x,
       LOG10(g.OIIIR_FLUX/g.HB_FLUX) AS bpt_y
     FROM GaussFitSimplev05 g
     JOIN SpecAllv27 s ON s.SPECID = g.SPECID
+    JOIN gkvGamaIIMatchesv01 m ON m.CATAID = g.CATAID
     WHERE g.SURVEY = 'GAMA' AND g.NQ > 2 AND g.IS_BEST = 1
+      AND m.uberID > 0
       AND g.Z BETWEEN 0.02 AND 0.25
 """
 
@@ -855,6 +858,7 @@ def build_gama(download_stamps=True):
                 {
                     "id": record["id"],
                     "cataid": record["cataid"],
+                    "uberID": record["uber_id"],
                     "name": record["gama_name"],
                     "ra": float(record["ra"]),
                     "dec": float(record["declination"]),
@@ -874,9 +878,8 @@ def build_gama(download_stamps=True):
             )
         print(f"GAMA {category}: selected 100")
 
-    uberids = gama_uberid_map(row["cataid"] for row in catalog)
-    for row in catalog:
-        row["uberID"] = uberids.get(row["cataid"])
+    if any(not row["uberID"] for row in catalog):
+        raise RuntimeError("GAMA selection contains an object without a verified uberID")
 
     (DATA / "gama-catalog.json").write_text(
         json.dumps(catalog, separators=(",", ":"))

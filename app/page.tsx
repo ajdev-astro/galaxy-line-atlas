@@ -39,7 +39,7 @@ type DesiObject = {
 type GamaObject = {
   id: string;
   cataid: string;
-  uberID: string | null;
+  uberID: string;
   name: string;
   ra: number;
   dec: number;
@@ -750,7 +750,7 @@ export default function Home() {
         : null;
   const gamaIdentity =
     survey === "gama"
-      ? `uberID ${(object as GamaObject).uberID ?? "not available in DR4 mapping"} · CATAID ${(object as GamaObject).cataid}`
+      ? `uberID ${(object as GamaObject).uberID} · CATAID ${(object as GamaObject).cataid}`
       : null;
 
   const adjustExpandedZoom = (factor: number) => {

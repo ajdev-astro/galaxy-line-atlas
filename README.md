@@ -183,10 +183,10 @@ The GAMA teaching sample comes from GAMA DR4. Spectra are required to have:
 
 `GaussFitSimplev05` supplies the continuum S/N, narrow D4000 measurement and
 emission-line fits. It is joined to `SpecAllv27` by `SPECID` to obtain the GAMA
-name and released spectrum URL. GAMA II `CATAID` values are mapped to GAMA III
-`uberID` values with `gkvGamaIIMatchesv01`. The atlas reports no `uberID` when
-that released mapping has no match, including G02 where GAMA III has no
-coverage. Candidates are ordered by continuum S/N.
+name and released spectrum URL. GAMA II `CATAID` values are joined to GAMA III
+`uberID` values with `gkvGamaIIMatchesv01`. Only objects with a verified
+mapping are eligible: an unmapped candidate is replaced by the next spectrum
+satisfying the same population cuts and continuum-S/N ordering.
 Previously used `SPECID` values are excluded as each class is assembled, so
 the 400 category placements are 400 unique spectra.
 
