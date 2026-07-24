@@ -39,6 +39,7 @@ type DesiObject = {
 type GamaObject = {
   id: string;
   cataid: string;
+  uberID: string | null;
   name: string;
   ra: number;
   dec: number;
@@ -47,8 +48,8 @@ type GamaObject = {
   imageSource: string;
   continuumSn: number;
   d4000: number;
-  bptX?: number;
-  bptY?: number;
+  bptX?: number | null;
+  bptY?: number | null;
 };
 type AtlasObject = SdssObject | DesiObject | GamaObject;
 type Spectrum = { w: number[]; f: number[] };
@@ -238,6 +239,10 @@ function truncateFixed(value: number, decimalPlaces: number) {
   return (Math.floor(value * factor + 1e-8) / factor).toFixed(decimalPlaces);
 }
 
+function isFiniteNumber(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
 function sdssDesignation(ra: number, dec: number) {
   const raHours = (((ra % 360) + 360) % 360) / 15;
   const raHour = Math.floor(raHours);
@@ -415,6 +420,8 @@ function SpectrumPlot({
           return (
             <g
               key={`${line.name}-${line.rest}`}
+              onPointerDown={(event) => event.stopPropagation()}
+              onPointerUp={(event) => event.stopPropagation()}
               onClick={() => onLine(index)}
               className="svg-line-marker"
             >
@@ -468,8 +475,13 @@ function BptPlot({
   selected,
   color,
 }: {
-  rows: Array<{ id: string; category: string; bptX?: number; bptY?: number }>;
-  selected: { bptX?: number; bptY?: number };
+  rows: Array<{
+    id: string;
+    category: string;
+    bptX?: number | null;
+    bptY?: number | null;
+  }>;
+  selected: { bptX?: number | null; bptY?: number | null };
   color: string;
 }) {
   const xMin = -2;
@@ -484,14 +496,15 @@ function BptPlot({
       .join(" ");
   const valid = rows.filter(
     (row) =>
-      row.bptX !== undefined &&
-      row.bptY !== undefined &&
+      isFiniteNumber(row.bptX) &&
+      isFiniteNumber(row.bptY) &&
       row.bptX >= xMin &&
       row.bptX <= xMax &&
       row.bptY >= yMin &&
       row.bptY <= yMax,
   );
-  const hasSelected = selected.bptX !== undefined && selected.bptY !== undefined;
+  const hasSelected =
+    isFiniteNumber(selected.bptX) && isFiniteNumber(selected.bptY);
 
   return (
     <article className="diagnostic-card">
@@ -735,6 +748,10 @@ export default function Home() {
       : survey === "gama"
         ? `AAOmega ${(object as GamaObject).id}`
         : null;
+  const gamaIdentity =
+    survey === "gama"
+      ? `uberID ${(object as GamaObject).uberID ?? "not available in DR4 mapping"} · CATAID ${(object as GamaObject).cataid}`
+      : null;
 
   const adjustExpandedZoom = (factor: number) => {
     if (!spectrum) return;
@@ -949,6 +966,7 @@ export default function Home() {
             <div className="object-id">
               <span>{survey.toUpperCase()} OBJECT</span>
               <strong>{objectLabel}</strong>
+              {gamaIdentity && <small>{gamaIdentity}</small>}
               {spectrumLabel && <small>{spectrumLabel}</small>}
             </div>
             <div className="redshift"><span>REDSHIFT</span><strong>z {object.z.toFixed(4)}</strong></div>
@@ -1020,6 +1038,22 @@ export default function Home() {
                 <button className={frame === "observed" ? "active" : ""} onClick={() => { setFrame("observed"); setZoomRange(null); }}>Observed frame</button>
                 <button className={frame === "rest" ? "active" : ""} onClick={() => { setFrame("rest"); setZoomRange(null); }}>Rest frame</button>
               </div>
+              <label className="expanded-line-select">
+                Spectral line
+                <select
+                  value={lineIndex}
+                  onChange={(event) => setLineIndex(Number(event.target.value))}
+                >
+                  {spectralLines.map((line, lineOptionIndex) => (
+                    <option
+                      key={`${line.name}-${line.rest}`}
+                      value={lineOptionIndex}
+                    >
+                      {line.name} · {line.rest} Å
+                    </option>
+                  ))}
+                </select>
+              </label>
               <div className="zoom-buttons">
                 <button onClick={() => adjustExpandedZoom(0.6)}>Zoom in</button>
                 <button onClick={() => adjustExpandedZoom(1.65)}>Zoom out</button>
