@@ -65,6 +65,20 @@ pnpm dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+## Experimental on-demand archive
+
+The `/archive/` route is a separate, opt-in path for searching SDSS DR18,
+DESI DR1 and GAMA DR4 beyond the bundled teaching sample. It uses a thin
+FastAPI adapter and stores no persistent catalogue, spectrum, FITS file, or
+cutout. Only bounded in-memory response caches are used; official Legacy
+Surveys cutouts load directly in the browser.
+
+The adapter returns source-native labels and observed-frame released pixels
+with units, identifiers, quality flags, exact query provenance, and validation
+results. It does not assign a new galaxy class. See the
+[archive API documentation](services/archive-api/README.md) for the fail-closed
+checks, cost controls, local setup, and container deployment.
+
 ## Build
 
 ```bash

@@ -889,7 +889,10 @@ export default function Home() {
             GAMA DR4 <b>400</b>
           </button>
         </div>
-        <button className="random-button" onClick={randomise}><span>↝</span> Surprise me</button>
+        <div className="topbar-actions">
+          <a className="archive-link" href={`${BASE_PATH}/archive/`}>Archive beta</a>
+          <button className="random-button" onClick={randomise}><span>↝</span> Surprise me</button>
+        </div>
       </header>
 
       <section className="intro" id="top">

@@ -13,6 +13,7 @@ cards work without cross-origin canvas restrictions.
 from __future__ import annotations
 
 import csv
+import html
 import io
 import json
 import math
@@ -681,7 +682,7 @@ def build_desi_stamps():
 
 GAMA_BASE_SELECT = """
     SELECT
-      g.SPECID AS id, g.CATAID AS cataid, g.RA AS ra, g.DEC AS declination,
+      g.SPECID AS id, g.CATAID AS cataid, g.RA AS ra, g.`DEC` AS declination,
       g.Z AS redshift, s.GAMA_NAME AS gama_name, s.URL AS spectrum_url,
       g.SN AS continuum_sn, g.D4000N AS d4000,
       LOG10(g.NIIR_FLUX/g.HA_FLUX) AS bpt_x,
@@ -709,8 +710,8 @@ GAMA_SQL = {
     "star-forming": GAMA_BASE_SELECT
     + GAMA_BPT_QUALITY
     + """
-      AND LOG10(g.OIIIR_FLUX/g.HB_FLUX)
-          < 0.61/(LOG10(g.NIIR_FLUX/g.HA_FLUX)-0.05)+1.3
+      AND 0.61/(LOG10(g.NIIR_FLUX/g.HA_FLUX)-0.05)+1.3
+          > LOG10(g.OIIIR_FLUX/g.HB_FLUX)
       ORDER BY g.SN DESC LIMIT 140
     """,
     "composite": GAMA_BASE_SELECT
@@ -718,8 +719,8 @@ GAMA_SQL = {
     + """
       AND LOG10(g.OIIIR_FLUX/g.HB_FLUX)
           >= 0.61/(LOG10(g.NIIR_FLUX/g.HA_FLUX)-0.05)+1.3
-      AND LOG10(g.OIIIR_FLUX/g.HB_FLUX)
-          < 0.61/(LOG10(g.NIIR_FLUX/g.HA_FLUX)-0.47)+1.19
+      AND 0.61/(LOG10(g.NIIR_FLUX/g.HA_FLUX)-0.47)+1.19
+          > LOG10(g.OIIIR_FLUX/g.HB_FLUX)
       ORDER BY g.SN DESC LIMIT 140
     """,
     "agn": GAMA_BASE_SELECT
@@ -731,17 +732,23 @@ GAMA_SQL = {
     """,
     "quenched": GAMA_BASE_SELECT
     + """
-      AND g.SN > 8 AND g.D4000N > 1.7 AND ABS(g.HA_EW) < 3
+      AND g.SN > 8 AND g.D4000N > 1.7 AND 3 > ABS(g.HA_EW)
       ORDER BY g.SN DESC LIMIT 140
     """,
 }
 
 
 def gama_query(sql):
+    normalized_sql = " ".join(sql.split())
+    if "<" in normalized_sql:
+        raise ValueError(
+            "GAMA DR4 truncates literal '<' operators; rewrite the query "
+            "with BETWEEN, NOT, or a reversed '>' comparison"
+        )
     response = SESSION.post(
         GAMA_QUERY,
         data={
-            "query": " ".join(sql.split()),
+            "query": normalized_sql,
             "format": "csv",
             "nshow": "100",
             "ndownload": "2000",
@@ -750,6 +757,18 @@ def gama_query(sql):
         timeout=90,
     )
     response.raise_for_status()
+    echoed_match = re.search(
+        r'Your query:<br>\s*<span class="query">(.*?)</span>',
+        response.text,
+        flags=re.DOTALL,
+    )
+    if not echoed_match:
+        raise RuntimeError("GAMA did not echo the submitted query")
+    echoed_sql = " ".join(html.unescape(echoed_match.group(1)).split())
+    if echoed_sql != normalized_sql:
+        raise RuntimeError(
+            "GAMA altered or truncated the submitted query; result rejected"
+        )
     match = re.search(r'href="\.\./tmp/(GAMA_[A-Za-z0-9]+\.csv)"', response.text)
     if not match:
         raise RuntimeError("GAMA query did not return a catalogue download")
