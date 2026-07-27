@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   categories,
   desiFamilies,
@@ -323,6 +323,10 @@ function SpectrumPlot({
   interactive?: boolean;
 }) {
   const [dragStart, setDragStart] = useState<number | null>(null);
+  const spectrumId = useId().replace(/:/g, "");
+  const titleId = `${spectrumId}-title`;
+  const descriptionId = `${spectrumId}-description`;
+  const clipId = `${spectrumId}-clip`;
   if (!spectrum) {
     return <div className="plot-loading">Loading calibrated flux…</div>;
   }
@@ -353,7 +357,7 @@ function SpectrumPlot({
       <svg
         viewBox="0 0 1100 650"
         role="img"
-        aria-labelledby="spectrum-title spectrum-description"
+        aria-labelledby={`${titleId} ${descriptionId}`}
         onPointerDown={(event) => {
           if (!interactive) return;
           try {
@@ -394,12 +398,12 @@ function SpectrumPlot({
           onZoomRange([nextMin, nextMax]);
         }}
       >
-        <title id="spectrum-title">{`${survey.toUpperCase()} ${frame}-frame spectrum for ${objectLabel}`}</title>
-        <desc id="spectrum-description">
+        <title id={titleId}>{`${survey.toUpperCase()} ${frame}-frame spectrum for ${objectLabel}`}</title>
+        <desc id={descriptionId}>
           Spectrum with labelled spectral features and numerical wavelength and flux-density axes.
         </desc>
         <defs>
-          <clipPath id="spectrum-clip"><rect x="95" y="105" width="970" height="460" /></clipPath>
+          <clipPath id={clipId}><rect x="95" y="105" width="970" height="460" /></clipPath>
         </defs>
         <rect width="1100" height="650" fill="#fff" />
         <text x="95" y="31" className="plot-header">
@@ -423,7 +427,7 @@ function SpectrumPlot({
           </g>
         ))}
         <rect x="95" y="105" width="970" height="460" fill="none" className="plot-frame" />
-        <g clipPath="url(#spectrum-clip)">
+        <g clipPath={`url(#${clipId})`}>
           <path d={rawPath} className="raw-spectrum" />
           <path d={smoothPath} className="smooth-spectrum" />
         </g>
