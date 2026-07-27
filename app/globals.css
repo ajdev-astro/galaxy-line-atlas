@@ -170,7 +170,8 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--cyan); outline-
   text-transform: uppercase; letter-spacing: .12em;
 }
 .spectrum-dialog {
-  width: min(96vw, 1540px); max-width: none; max-height: 96vh; padding: 0;
+  width: min(96vw, 1540px); height: 96vh; max-width: none; max-height: 1020px;
+  box-sizing: border-box; padding: 0;
   border: 1px solid #4a504d; background: #111415; color: var(--paper);
   box-shadow: 0 30px 100px rgba(0,0,0,.62);
 }
@@ -402,7 +403,7 @@ footer a { color: #b8bbb5; text-decoration: none; border-bottom: 1px solid #4d52
   .study-head h2 { font-size: 29px; }
   .science-plot { min-height: 260px; }
   .expand-spectrum { font-size: 8px; padding: 7px 8px; }
-  .spectrum-dialog { width: 99vw; max-height: 98vh; }
+  .spectrum-dialog { width: 99vw; height: 98vh; max-height: none; }
   .expanded-head, .expanded-controls { align-items: flex-start; flex-wrap: wrap; padding: 10px; }
   .expanded-line-select { width: 100%; justify-content: space-between; }
   .expanded-line-select select { flex: 1; min-width: 0; }
