@@ -50,6 +50,8 @@ type GamaObject = {
   d4000: number;
   bptX?: number | null;
   bptY?: number | null;
+  logMass?: number | null;
+  logSfr?: number | null;
 };
 type AtlasObject = SdssObject | DesiObject | GamaObject;
 type Spectrum = { w: number[]; f: number[] };
@@ -259,30 +261,37 @@ function sdssDesignation(ra: number, dec: number) {
   return `SDSS J${String(raHour).padStart(2, "0")}${String(raMinute).padStart(2, "0")}${truncateFixed(raSecond, 2).padStart(5, "0")}${dec >= 0 ? "+" : "-"}${String(decDegree).padStart(2, "0")}${String(decMinute).padStart(2, "0")}${truncateFixed(decSecond, 1).padStart(4, "0")}`;
 }
 
+type StampCandidate = { url: string; source: string; useCors?: boolean };
+
 function StampImage({
-  primaryUrl,
-  fallbackUrl,
+  candidates,
   alt,
-  useCors,
+  onSourceChange,
 }: {
-  primaryUrl: string;
-  fallbackUrl: string;
+  candidates: StampCandidate[];
   alt: string;
-  useCors: boolean;
+  onSourceChange: (source: string) => void;
 }) {
-  const [useFallback, setUseFallback] = useState(false);
+  const [candidateIndex, setCandidateIndex] = useState(0);
+  const candidate = candidates[Math.min(candidateIndex, candidates.length - 1)];
 
   useEffect(() => {
-    if (primaryUrl === fallbackUrl) return;
-    const timer = window.setTimeout(() => setUseFallback(true), 8000);
+    if (candidateIndex >= candidates.length - 1) return;
+    const timer = window.setTimeout(
+      () => setCandidateIndex((current) => Math.min(current + 1, candidates.length - 1)),
+      8000,
+    );
     return () => window.clearTimeout(timer);
-  }, [primaryUrl, fallbackUrl]);
+  }, [candidateIndex, candidates.length]);
 
   return (
     <img
-      src={useFallback ? fallbackUrl : primaryUrl}
-      crossOrigin={!useFallback && useCors ? "anonymous" : undefined}
-      onError={() => setUseFallback(true)}
+      src={candidate.url}
+      crossOrigin={candidate.useCors ? "anonymous" : undefined}
+      onLoad={() => onSourceChange(candidate.source)}
+      onError={() =>
+        setCandidateIndex((current) => Math.min(current + 1, candidates.length - 1))
+      }
       alt={alt}
     />
   );
@@ -347,7 +356,11 @@ function SpectrumPlot({
         aria-labelledby="spectrum-title spectrum-description"
         onPointerDown={(event) => {
           if (!interactive) return;
-          event.currentTarget.setPointerCapture(event.pointerId);
+          try {
+            event.currentTarget.setPointerCapture?.(event.pointerId);
+          } catch {
+            // Some Safari/SVG combinations do not support pointer capture.
+          }
           setDragStart(pointerWavelength(event.clientX, event.currentTarget));
         }}
         onPointerUp={(event) => {
@@ -358,6 +371,8 @@ function SpectrumPlot({
             onZoomRange([Math.min(dragStart, end), Math.max(dragStart, end)]);
           }
         }}
+        onPointerCancel={() => setDragStart(null)}
+        onLostPointerCapture={() => setDragStart(null)}
         onDoubleClick={() => interactive && onZoomRange?.(null)}
         onWheel={(event) => {
           if (!interactive || !onZoomRange) return;
@@ -505,6 +520,17 @@ function BptPlot({
   );
   const hasSelected =
     isFiniteNumber(selected.bptX) && isFiniteNumber(selected.bptY);
+  const selectedClass = hasSelected
+    ? selected.bptX! < 0.05 &&
+      selected.bptY! < 0.61 / (selected.bptX! - 0.05) + 1.3
+      ? "star-forming"
+      : selected.bptX! < 0.47 &&
+          selected.bptY! < 0.61 / (selected.bptX! - 0.47) + 1.19
+        ? "composite"
+        : selected.bptY! >= 1.05 * selected.bptX! + 0.45
+          ? "Seyfert-like"
+          : "LINER-like"
+    : null;
 
   return (
     <article className="diagnostic-card">
@@ -531,9 +557,11 @@ function BptPlot({
         ))}
         <path d={curve((x) => 0.61 / (x - 0.05) + 1.3, -1.95, -0.12)} fill="none" stroke="#28857c" strokeWidth="2" />
         <path d={curve((x) => 0.61 / (x - 0.47) + 1.19, -1.95, 0.23)} fill="none" stroke="#9a5d32" strokeWidth="2" strokeDasharray="6 5" />
+        <path d={curve((x) => 1.05 * x + 0.45, -0.184, 0.45)} fill="none" stroke="#68529a" strokeWidth="2" strokeDasharray="3 4" />
         <text x={px(-1.55)} y={py(-.75)} className="region-label">STAR FORMING</text>
         <text x={px(-.62)} y={py(.25)} className="region-label">COMPOSITE</text>
-        <text x={px(-.12)} y={py(1.05)} className="region-label">AGN</text>
+        <text x={px(-.12)} y={py(1.20)} className="region-label">SEYFERT</text>
+        <text x={px(.02)} y={py(.12)} className="region-label">LINER</text>
         {hasSelected && (
           <>
             <circle cx={px(selected.bptX!)} cy={py(selected.bptY!)} r="9" fill={color} stroke="#111" strokeWidth="3" />
@@ -545,7 +573,7 @@ function BptPlot({
       </svg>
       <p className="diagnostic-note">
         {hasSelected
-          ? `This object lies at (${selected.bptX!.toFixed(2)}, ${selected.bptY!.toFixed(2)}). The background shows ${valid.length} reliable placements from this atlas.`
+          ? `This object lies at (${selected.bptX!.toFixed(2)}, ${selected.bptY!.toFixed(2)}) in the ${selectedClass} region. The background shows ${valid.length} reliable placements from this atlas.`
           : "No point is shown because one or more required emission lines has S/N below 3."}
       </p>
     </article>
@@ -556,10 +584,17 @@ function MainSequencePlot({
   rows,
   selected,
   color,
+  source,
 }: {
-  rows: SdssObject[];
-  selected: SdssObject;
+  rows: Array<{
+    id: string;
+    category: string;
+    logMass?: number | null;
+    logSfr?: number | null;
+  }>;
+  selected: { logMass?: number | null; logSfr?: number | null };
   color: string;
+  source: "sdss" | "gama";
 }) {
   const xMin = 8;
   const xMax = 12;
@@ -569,20 +604,24 @@ function MainSequencePlot({
   const py = (value: number) => scale(value, yMin, yMax, 366, 24);
   const valid = rows.filter(
     (row) =>
-      row.logMass !== undefined &&
-      row.logSfr !== undefined &&
+      isFiniteNumber(row.logMass) &&
+      isFiniteNumber(row.logSfr) &&
       row.logMass >= xMin &&
       row.logMass <= xMax &&
       row.logSfr >= yMin &&
       row.logSfr <= yMax,
   );
-  const hasSelected = selected.logMass !== undefined && selected.logSfr !== undefined;
+  const hasSelected = isFiniteNumber(selected.logMass) && isFiniteNumber(selected.logSfr);
+  const sourceLabel =
+    source === "gama"
+      ? "ProSpect v03 stellar mass and star-formation rate"
+      : "Total MPA–JHU stellar mass and star-formation rate";
 
   return (
     <article className="diagnostic-card">
       <div className="diagnostic-title">
         <span>GALAXY GROWTH</span><h3>Stellar main sequence</h3>
-        <p>Total MPA–JHU stellar mass and star-formation rate</p>
+        <p>{sourceLabel}</p>
       </div>
       <svg viewBox="0 0 640 410" role="img" aria-label="Stellar mass versus star formation rate diagram">
         <rect width="640" height="410" fill="#f4f1e8" />
@@ -615,8 +654,8 @@ function MainSequencePlot({
       </svg>
       <p className="diagnostic-note">
         {hasSelected
-          ? `This object has log M★ = ${selected.logMass!.toFixed(2)} and log SFR = ${selected.logSfr!.toFixed(2)}. The grey cloud is the measured SDSS atlas sample.`
-          : "No point is shown because the legacy MPA–JHU catalogue has no usable mass–SFR estimate for this object."}
+          ? `This object has log M★ = ${selected.logMass!.toFixed(2)} and log SFR = ${selected.logSfr!.toFixed(2)}. The grey cloud is the measured ${source.toUpperCase()} atlas sample.`
+          : `No point is shown because ${source === "gama" ? "ProSpect v03" : "the legacy MPA–JHU catalogue"} has no usable mass–SFR estimate for this object.`}
       </p>
     </article>
   );
@@ -636,6 +675,7 @@ export default function Home() {
   const [downloading, setDownloading] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [zoomRange, setZoomRange] = useState<[number, number] | null>(null);
+  const [loadedStamp, setLoadedStamp] = useState({ key: "", source: "" });
   const spectrumDialog = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -653,8 +693,14 @@ export default function Home() {
   useEffect(() => {
     const dialog = spectrumDialog.current;
     if (!dialog) return;
-    if (expanded && !dialog.open) dialog.showModal();
-    if (!expanded && dialog.open) dialog.close();
+    if (expanded && !dialog.open) {
+      if (typeof dialog.showModal === "function") dialog.showModal();
+      else dialog.setAttribute("open", "");
+    }
+    if (!expanded && dialog.open) {
+      if (typeof dialog.close === "function") dialog.close();
+      else dialog.removeAttribute("open");
+    }
   }, [expanded]);
 
   const groups =
@@ -723,19 +769,26 @@ export default function Home() {
   const observedLine = selectedLine.rest * (1 + object.z);
   const objectKey =
     survey === "desi" ? (object as DesiObject).targetid : object.id;
+  const stampKey = `${survey}-${objectKey}`;
   const localStampUrl = `${BASE_PATH}/${survey}/stamps/${objectKey}.jpg`;
   const legacyStampUrl =
     `https://www.legacysurvey.org/viewer/jpeg-cutout?ra=${object.ra}` +
     `&dec=${object.dec}&layer=ls-dr10&pixscale=0.262&size=360`;
-  const surveyFallbackStampUrl =
-    survey === "desi"
-      ? localStampUrl
-      : `https://skyserver.sdss.org/dr18/SkyServerWS/ImgCutout/getjpeg?ra=${object.ra}&dec=${object.dec}&scale=0.25&width=360&height=360`;
-  const stampUrl = survey === "sdss" ? localStampUrl : legacyStampUrl;
-  const stampSource =
+  const dssStampUrl =
+    "https://alasky.u-strasbg.fr/hips-image-services/hips2fits" +
+    `?hips=CDS%2FP%2FDSS2%2Fcolor&width=360&height=360&fov=0.025&projection=TAN&coordsys=icrs&ra=${object.ra}&dec=${object.dec}&format=jpg`;
+  const stampCandidates: StampCandidate[] =
     survey === "sdss"
-      ? "SDSS DR18 colour"
-      : "Legacy Surveys DR10";
+      ? [{ url: localStampUrl, source: "SDSS DR18 colour" }]
+      : survey === "desi"
+        ? [
+            { url: legacyStampUrl, source: "Legacy Surveys DR10", useCors: true },
+            { url: localStampUrl, source: (object as DesiObject).imageSource ?? "Legacy Surveys DR10" },
+          ]
+        : [
+            { url: legacyStampUrl, source: "Legacy Surveys DR10", useCors: true },
+            { url: dssStampUrl, source: "Digitized Sky Survey 2 colour", useCors: true },
+          ];
   const objectLabel =
     survey === "sdss"
       ? sdssDesignation(object.ra, object.dec)
@@ -801,9 +854,12 @@ export default function Home() {
       };
       let image: HTMLImageElement;
       try {
-        image = await loadImage(stampUrl, survey !== "sdss");
+        image = await loadImage(stampCandidates[0].url, Boolean(stampCandidates[0].useCors));
       } catch {
-        image = await loadImage(surveyFallbackStampUrl, false);
+        image = await loadImage(
+          stampCandidates[stampCandidates.length - 1].url,
+          Boolean(stampCandidates[stampCandidates.length - 1].useCors),
+        );
       }
       const canvas = document.createElement("canvas");
       canvas.width = 1600;
@@ -1004,10 +1060,9 @@ export default function Home() {
             <aside className="postage-card">
               <div className="stamp-wrap">
                 <StampImage
-                  key={`${survey}-${objectKey}`}
-                  primaryUrl={stampUrl}
-                  fallbackUrl={surveyFallbackStampUrl}
-                  useCors={survey !== "sdss"}
+                  key={stampKey}
+                  candidates={stampCandidates}
+                  onSourceChange={(source) => setLoadedStamp({ key: stampKey, source })}
                   alt={`Colour image of the selected ${group.name} object`}
                 />
                 <div className="crosshair" /><span className="north">N</span><span className="east">E</span>
@@ -1016,7 +1071,9 @@ export default function Home() {
                 <span>RA {object.ra.toFixed(5)}°</span>
                 <span>DEC {object.dec >= 0 ? "+" : ""}{object.dec.toFixed(5)}°</span>
               </div>
-              <div className="stamp-source">{stampSource}{survey !== "sdss" && " · automatic survey fallback"}</div>
+              <div className="stamp-source">
+                {loadedStamp.key === stampKey ? loadedStamp.source : stampCandidates[0].source}
+              </div>
               <div className="stamp-caption"><span style={{ color: group.color }}>{group.short}</span><p>{group.lesson}</p></div>
             </aside>
           </div>
@@ -1073,7 +1130,7 @@ export default function Home() {
               onZoomRange={setZoomRange}
               interactive
             />
-            <p className="expanded-hint">Drag across a wavelength interval or use the mouse wheel to zoom. Double-click to restore the full range.</p>
+            <p className="expanded-hint">Drag across a wavelength interval, use a wheel or trackpad, or use the zoom buttons. Double-click to restore the full range.</p>
           </dialog>
 
           <div className="object-navigation">
@@ -1152,15 +1209,12 @@ export default function Home() {
           {survey === "sdss" ? (
             <>
               <BptPlot rows={sdss} selected={object as SdssObject} color={group.color} />
-              <MainSequencePlot rows={sdss} selected={object as SdssObject} color={group.color} />
+              <MainSequencePlot rows={sdss} selected={object as SdssObject} color={group.color} source="sdss" />
             </>
           ) : survey === "gama" ? (
             <>
               <BptPlot rows={gama} selected={object as GamaObject} color={group.color} />
-              <DiagnosticUnavailable
-                title="Stellar main sequence"
-                note="The GAMA spectra and line measurements are in place. A single, survey-consistent stellar-mass and SFR value-added selection will be added before showing this population diagram."
-              />
+              <MainSequencePlot rows={gama} selected={object as GamaObject} color={group.color} source="gama" />
             </>
           ) : (
             <>
@@ -1187,7 +1241,7 @@ export default function Home() {
 
       <footer>
         <div><strong>LINE / ATLAS</strong><span>Learn galaxy spectra with SDSS, DESI and GAMA</span></div>
-        <p>Spectra: SDSS DR18, DESI DR1 and GAMA DR4. Postage stamps: SDSS DR18 and Legacy Surveys DR10. Class selections are educational guides, not definitive diagnoses.</p>
+        <p>Spectra: SDSS DR18, DESI DR1 and GAMA DR4. Postage stamps: SDSS DR18, Legacy Surveys DR10 and DSS2 fallback. Class selections are educational guides, not definitive diagnoses.</p>
         <div className="footer-links">
           <a href="https://skyserver.sdss.org/dr18/" target="_blank" rel="noreferrer">SDSS ↗</a>
           <a href="https://data.desi.lbl.gov/doc/releases/dr1/" target="_blank" rel="noreferrer">DESI DR1 ↗</a>

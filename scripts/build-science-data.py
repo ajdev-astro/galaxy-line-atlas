@@ -808,6 +808,43 @@ def enrich_gama_uberids():
     print(f"GAMA uberID: matched {sum(row['uberID'] is not None for row in catalog)}/{len(catalog)}")
 
 
+def gama_prospect_map(uberids):
+    mapping = {}
+    unique_ids = sorted({int(uberid) for uberid in uberids if uberid})
+    for start in range(0, len(unique_ids), 200):
+        batch = unique_ids[start : start + 200]
+        rows = gama_query(
+            "SELECT uberID, StellarMass_50, SFR_50 FROM ProSpectv03 "
+            f"WHERE uberID IN ({','.join(map(str, batch))})"
+        )
+        for row in rows:
+            mass = float(row["StellarMass_50"])
+            sfr = float(row["SFR_50"])
+            if np.isfinite(mass) and mass > 0 and np.isfinite(sfr) and sfr > 0:
+                mapping[row["uberID"]] = {
+                    "logMass": round(float(np.log10(mass)), 4),
+                    "logSfr": round(float(np.log10(sfr)), 4),
+                }
+    return mapping
+
+
+def attach_gama_prospect(catalog):
+    mapping = gama_prospect_map(row.get("uberID") for row in catalog)
+    for row in catalog:
+        values = mapping.get(str(row.get("uberID")))
+        row["logMass"] = values["logMass"] if values else None
+        row["logSfr"] = values["logSfr"] if values else None
+    return sum(row["logMass"] is not None for row in catalog)
+
+
+def enrich_gama_prospect():
+    path = DATA / "gama-catalog.json"
+    catalog = json.loads(path.read_text())
+    matched = attach_gama_prospect(catalog)
+    path.write_text(json.dumps(catalog, separators=(",", ":")))
+    print(f"GAMA ProSpect v03: matched {matched}/{len(catalog)}")
+
+
 def cache_gama_spectrum(row):
     destination = GAMA_SPECTRA / f"{row['id']}.json"
     if destination.exists():
@@ -881,6 +918,9 @@ def build_gama(download_stamps=True):
     if any(not row["uberID"] for row in catalog):
         raise RuntimeError("GAMA selection contains an object without a verified uberID")
 
+    matched = attach_gama_prospect(catalog)
+    print(f"GAMA ProSpect v03: matched {matched}/{len(catalog)}")
+
     (DATA / "gama-catalog.json").write_text(
         json.dumps(catalog, separators=(",", ":"))
     )
@@ -950,6 +990,8 @@ if __name__ == "__main__":
         build_gama(download_stamps=False)
     if target == "gama-uberids":
         enrich_gama_uberids()
+    if target == "gama-prospect":
+        enrich_gama_prospect()
     if target == "desi-stamps":
         build_desi_stamps()
     if target == "legacy-stamps":

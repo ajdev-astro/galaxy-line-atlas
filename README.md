@@ -49,12 +49,13 @@ resampling method described by
 For SDSS objects, the atlas also shows the selected galaxy on:
 
 - the [N II] BPT diagram, using MPA–JHU Hα, Hβ, [O III] λ5007 and
-  [N II] λ6584 line fluxes; and
+  [N II] λ6584 line fluxes, including an empirical Seyfert/LINER division; and
 - the stellar mass–SFR plane, using the MPA–JHU median total stellar mass and
   total SFR estimates.
 
 For GAMA objects, the atlas shows the selected galaxy on the same [N II] BPT
-plane using the GAMA `GaussFitSimplev05` line measurements.
+plane using the GAMA `GaussFitSimplev05` line measurements and on a separate
+GAMA stellar mass–SFR plane using median `ProSpectv03` measurements.
 
 ## Run locally
 
@@ -141,7 +142,12 @@ once and can appear in more than one learning set.
 A BPT point is plotted only when all four required line fluxes are positive and
 have S/N ≥ 3. The background cloud is made from all valid SDSS placements in
 this atlas. The solid and dashed curves show the Kauffmann and Kewley
-demarcations respectively.
+demarcations respectively. Above the Kewley curve, the dotted
+`y = 1.05x + 0.45` line is the empirical [N II] Seyfert/LINER separator from
+[Schawinski et al. (2007)](https://ui.adsabs.harvard.edu/abs/2007MNRAS.382.1415S/abstract).
+This display separator supplements rather than changes the SDSS teaching-set
+selection, whose Seyfert and LINER classes use the [S II] diagram described
+above.
 
 The mass–SFR panel uses `lgm_tot_p50` and `sfr_tot_p50` from `galSpecExtra`.
 These are legacy MPA–JHU DR8 value-added measurements served by DR18, not new
@@ -204,6 +210,23 @@ Here `x = log10([N II] λ6584/Hα)` and
 a replacement for the complete GAMA selection function or a definitive
 classification of each galaxy.
 
+### GAMA stellar masses and star-formation rates
+
+The GAMA mass–SFR panel uses `StellarMass_50` and `SFR_50` from the DR4
+[`ProSpectv03` table](https://www.gama-survey.org/dr4/schema/table.php?id=721),
+matched by `uberID`. These are the recommended median values from ProSpect
+UV-to-far-infrared SED fits and use a Chabrier IMF. The released table contains
+objects satisfying `SC ≥ 4` and `NQ > 2`; 321 of this atlas's 400 GAMA spectra
+have a valid positive value for both quantities. Objects outside that
+value-added catalogue, or with an unusable value, remain in the spectral atlas
+but are not plotted on the mass–SFR plane.
+
+The GAMA DR4 [`ProSpect` DMU](https://www.gama-survey.org/dr4/schema/dmu.php?id=1015)
+is used as one internally consistent source for both axes. `ProSpectv03` does
+not include an AGN component, so positions of AGN-like objects should be
+treated cautiously; the panel is a population-learning view, not a new fit or
+a definitive physical classification.
+
 ## Spectrum and image processing
 
 Only pixels with finite wavelength and flux, positive inverse variance and
@@ -218,10 +241,15 @@ calibrated flux density, row 2 is its 1σ error, and the wavelength grid is
 reconstructed from the FITS WCS.
 
 SDSS postage stamps use the DR18 Image Cutout service. DESI and GAMA objects
-use the official Legacy Surveys DR10 JPEG cutout service with the survey's own
-colour rendering at 0.262 arcsec per pixel. This replaces the earlier locally
-constructed DES `i/r/g` composites, which had an excessively red colour
-balance. Existing local DESI stamps remain only as a network fallback.
+first use the official Legacy Surveys DR10 JPEG cutout service with the
+survey's own colour rendering at 0.262 arcsec per pixel. This replaces the
+earlier locally constructed DES `i/r/g` composites, which had an excessively
+red colour balance. Existing local DESI stamps remain only as a network
+fallback. For a GAMA position without a usable Legacy Surveys response, the
+browser requests the all-sky
+[CDS DSS2 colour HiPS](https://aladin.cds.unistra.fr/hips/list) through the
+CDS HiPS2FITS service. The caption reports the image product actually shown;
+the fallback is not described as GAMA imaging.
 
 The samples are designed for visual pattern-recognition practice. They are not
 volume-limited, statistically representative, or definitive physical diagnoses
@@ -237,3 +265,4 @@ and line measurements are from
 [GAMA Data Release 4](https://www.gama-survey.org/dr4/). DESI and GAMA colour
 cutouts are from
 [DESI Legacy Imaging Surveys DR10](https://www.legacysurvey.org/dr10/description/).
+Fallback GAMA finding charts use the CDS Digitized Sky Survey 2 colour HiPS.
