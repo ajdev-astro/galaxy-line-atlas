@@ -119,7 +119,7 @@ function fluxConservingRebin(sourceWavelength: number[], sourceFlux: number[], t
   return rebinned;
 }
 
-function gaussianSmooth(values: number[], sigma = 2.4) {
+function gaussianSmooth(values: number[], sigma = 1.2) {
   const radius = Math.ceil(sigma * 4);
   const weights = Array.from(
     { length: radius * 2 + 1 },
