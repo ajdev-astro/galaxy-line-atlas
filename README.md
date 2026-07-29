@@ -30,6 +30,10 @@ as a light trace and a Gaussian-smoothed visual guide as a dark trace. The
 enlarged view supports wavelength-range dragging, mouse-wheel zoom, direct
 line selection and observed/rest-frame switching.
 
+The **Data & methods** control in the site header gives an optional in-app
+summary of the catalogues, value-added products, quality cuts and image sources
+for each survey. This README remains the complete reproducible description.
+
 The frame control performs a flux-conserving transformation rather than merely
 relabeling the horizontal axis. For the rest-frame display:
 
@@ -99,6 +103,14 @@ To refresh the GAMA catalogue and spectra without downloading image cutouts:
 python scripts/build-science-data.py gama-data
 ```
 
+To rebuild only the higher-purity SDSS broad-line lesson or the locally cached
+GAMA finding charts:
+
+```bash
+python scripts/build-science-data.py sdss-broadline
+python scripts/build-science-data.py gama-stamps
+```
+
 ## SDSS sample construction
 
 ### Catalogues and common quality cuts
@@ -129,7 +141,7 @@ The eight selections are:
 | Composite | `class = 'GALAXY'`, `0.02 < z < 0.20`; Hα, Hβ, [O III] λ5007 and [N II] λ6584 each have S/N > 5; the point lies above the Kauffmann et al. curve `y = 0.61/(x − 0.05) + 1.3` and below the Kewley et al. curve `y = 0.61/(x − 0.47) + 1.19`, where `x = log([N II]/Hα)` and `y = log([O III]/Hβ)`. |
 | Seyfert | `class = 'GALAXY'`, `0.02 < z < 0.25`; Hα, Hβ and [O III] each have S/N > 5 and both [S II] lines have S/N > 3; above the [S II] AGN boundary `y = 0.72/(x − 0.32) + 1.3` and above the Seyfert/LINER separator `y = 1.89x + 0.76`, with `x = log(([S II] λ6717 + λ6731)/Hα)`. |
 | LINER | The same redshift and line-S/N requirements as Seyfert; above the [S II] AGN boundary and on or below `y = 1.89x + 0.76`. |
-| Broad-line AGN | `class IN ('GALAXY','QSO')`, `subClass LIKE '%BROADLINE%'`, `0.02 < z < 0.50`. |
+| Broad-line AGN | `class = 'QSO'`, `subClass LIKE '%BROADLINE%'`, `0.02 < z < 0.50`. Requiring both fields gives a higher-purity visual teaching set than accepting every `GALAXY/BROADLINE` pipeline label. |
 | Quenched | `class = 'GALAXY'`, `0.02 < z < 0.25`, narrow D4000 > 1.75, HδA < 2 Å and Hα EW > −2 Å. The MPA–JHU convention gives emission negative equivalent width. |
 | Post-starburst | `class = 'GALAXY'`, `0.02 < z < 0.30`, HδA > 5 Å, HδA/error > 4 and Hα EW > −4 Å. |
 
@@ -240,16 +252,17 @@ AAOmega spectra come from the DR4 `reduced_27/1d` FITS products; row 1 is the
 calibrated flux density, row 2 is its 1σ error, and the wavelength grid is
 reconstructed from the FITS WCS.
 
-SDSS postage stamps use the DR18 Image Cutout service. DESI and GAMA objects
-first use the official Legacy Surveys DR10 JPEG cutout service with the
+SDSS postage stamps use the DR18 Image Cutout service. DESI objects first use
+the official Legacy Surveys DR10 JPEG cutout service with the
 survey's own colour rendering at 0.262 arcsec per pixel. This replaces the
 earlier locally constructed DES `i/r/g` composites, which had an excessively
 red colour balance. Existing local DESI stamps remain only as a network
-fallback. For a GAMA position without a usable Legacy Surveys response, the
-browser requests the all-sky
+fallback. The 400 curated GAMA objects use locally cached
 [CDS DSS2 colour HiPS](https://aladin.cds.unistra.fr/hips/list) through the
-CDS HiPS2FITS service. The caption reports the image product actually shown;
-the fallback is not described as GAMA imaging.
+CDS HiPS2FITS service. Caching this small teaching set removes the several-
+second delay from remote cutout generation; it is not the strategy proposed
+for a future million-object archive. The caption reports the image product
+actually shown, and DSS2 is not described as GAMA imaging.
 
 The samples are designed for visual pattern-recognition practice. They are not
 volume-limited, statistically representative, or definitive physical diagnoses

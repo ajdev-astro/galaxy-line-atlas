@@ -26,6 +26,8 @@ type SdssObject = {
   bptClass?: number;
   logMass?: number;
   logSfr?: number;
+  catalogClass?: string;
+  catalogSubclass?: string;
 };
 type DesiObject = {
   id: string;
@@ -680,7 +682,9 @@ export default function Home() {
   const [expanded, setExpanded] = useState(false);
   const [zoomRange, setZoomRange] = useState<[number, number] | null>(null);
   const [loadedStamp, setLoadedStamp] = useState({ key: "", source: "" });
+  const [methodsSurvey, setMethodsSurvey] = useState<Survey>("sdss");
   const spectrumDialog = useRef<HTMLDialogElement>(null);
+  const methodsDialog = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
     Promise.all([
@@ -764,6 +768,18 @@ export default function Home() {
     setRevealed(false);
     setZoomRange(null);
   };
+  const openMethods = () => {
+    const dialog = methodsDialog.current;
+    if (!dialog) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+  };
+  const closeMethods = () => {
+    const dialog = methodsDialog.current;
+    if (!dialog) return;
+    if (typeof dialog.close === "function") dialog.close();
+    else dialog.removeAttribute("open");
+  };
 
   if (!object) {
     return <main className="initial-loading">Preparing the spectral atlas…</main>;
@@ -790,6 +806,7 @@ export default function Home() {
             { url: localStampUrl, source: (object as DesiObject).imageSource ?? "Legacy Surveys DR10" },
           ]
         : [
+            { url: localStampUrl, source: (object as GamaObject).imageSource },
             { url: legacyStampUrl, source: "Legacy Surveys DR10", useCors: true },
             { url: dssStampUrl, source: "Digitized Sky Survey 2 colour", useCors: true },
           ];
@@ -966,8 +983,73 @@ export default function Home() {
             GAMA DR4 <b>400</b>
           </button>
         </div>
-        <button className="random-button" onClick={randomise}><span>↝</span> Surprise me</button>
+        <div className="topbar-actions">
+          <button className="methods-button" onClick={openMethods}>Data &amp; methods</button>
+          <button className="random-button" onClick={randomise}><span>↝</span> Surprise me</button>
+        </div>
       </header>
+
+      <dialog ref={methodsDialog} className="methods-dialog">
+        <div className="methods-head">
+          <div><span>PROVENANCE</span><h2>Data &amp; selection</h2></div>
+          <button onClick={closeMethods} aria-label="Close data and methods">Close ×</button>
+        </div>
+        <div className="methods-tabs" role="tablist" aria-label="Survey methodology">
+          {(["sdss", "desi", "gama"] as Survey[]).map((item) => (
+            <button
+              key={item}
+              className={methodsSurvey === item ? "active" : ""}
+              onClick={() => setMethodsSurvey(item)}
+            >
+              {item === "sdss" ? "SDSS" : item === "desi" ? "DESI DR1" : "GAMA DR4"}
+            </button>
+          ))}
+        </div>
+        <div className="methods-content">
+          {methodsSurvey === "sdss" ? (
+            <>
+              <p className="methods-lead">Legacy SDSS spectra and catalogue measurements served through DR18.</p>
+              <dl>
+                <div><dt>SPECTRA &amp; REDSHIFTS</dt><dd><code>SpecObj</code> and DR18-hosted <code>spec-lite</code> FITS; <code>zWarning = 0</code>.</dd></div>
+                <div><dt>EMISSION LINES</dt><dd>MPA–JHU <code>galSpecLine</code>; D4000 and HδA from <code>galSpecIndx</code>.</dd></div>
+                <div><dt>MASS &amp; SFR</dt><dd>Median total values from MPA–JHU <code>galSpecExtra</code>.</dd></div>
+                <div><dt>BROAD-LINE LESSON</dt><dd>100 spectra satisfying both pipeline <code>class = QSO</code> and <code>subClass = BROADLINE</code>, with clean redshifts. The stricter intersection avoids known false-positive galaxy line fits.</dd></div>
+                <div><dt>IMAGES</dt><dd>Locally cached SDSS DR18 colour cutouts.</dd></div>
+              </dl>
+            </>
+          ) : methodsSurvey === "desi" ? (
+            <>
+              <p className="methods-lead">Public DESI DR1 calibrated spectra retrieved through NOIRLab SPARCL.</p>
+              <dl>
+                <div><dt>CATALOGUE</dt><dd>SPARCL <code>DESI-DR1</code> records with zero redshift warning and DESI <code>TARGETID</code>.</dd></div>
+                <div><dt>TEACHING SETS</dt><dd>100 objects each at z = 0.02–0.25, 0.4–0.8 and 0.8–1.3, plus 100 quasars at z = 1.0–2.5.</dd></div>
+                <div><dt>DIAGNOSTICS</dt><dd>No BPT or mass–SFR position is claimed without a single homogeneous value-added catalogue.</dd></div>
+                <div><dt>IMAGES</dt><dd>Legacy Surveys DR10 colour cutouts with cached survey-image fallback.</dd></div>
+              </dl>
+            </>
+          ) : (
+            <>
+              <p className="methods-lead">GAMA DR4 best-redshift AAOmega spectra with matched GAMA value-added products.</p>
+              <dl>
+                <div><dt>SPECTRA</dt><dd><code>SpecAllv27</code>; GAMA-observed spectra only, <code>NQ &gt; 2</code>, <code>IS_BEST = 1</code>, z = 0.02–0.25.</dd></div>
+                <div><dt>LINES &amp; INDICES</dt><dd><code>GaussFitSimplev05</code> supplies line fluxes, continuum S/N and narrow D4000.</dd></div>
+                <div><dt>IDENTIFIERS</dt><dd>GAMA II <code>CATAID</code> mapped to GAMA III <code>uberID</code> with <code>gkvGamaIIMatchesv01</code>.</dd></div>
+                <div><dt>MASS &amp; SFR</dt><dd>Median <code>StellarMass_50</code> and <code>SFR_50</code> from <code>ProSpectv03</code>.</dd></div>
+                <div><dt>IMAGES</dt><dd>Locally cached DSS2 colour finding charts so the curated sample does not wait on remote cutout generation.</dd></div>
+              </dl>
+            </>
+          )}
+          <p className="methods-caveat">These are reproducible teaching selections, not complete, random or volume-limited survey samples.</p>
+          <a
+            className="methods-readme"
+            href="https://github.com/ajdev-astro/galaxy-line-atlas#sdss-sample-construction"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Full cuts, equations and catalogue notes ↗
+          </a>
+        </div>
+      </dialog>
 
       <section className="intro" id="top">
         <div>

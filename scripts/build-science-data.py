@@ -45,6 +45,7 @@ DES_SIA = "https://datalab.noirlab.edu/sia/des_dr2"
 GAMA_QUERY = "https://www.gama-survey.org/dr4/query/index.php"
 GAMA_ROOT = "https://www.gama-survey.org"
 LEGACY_CUTOUT = "https://www.legacysurvey.org/viewer/jpeg-cutout"
+DSS_CUTOUT = "https://alasky.u-strasbg.fr/hips-image-services/hips2fits"
 
 for directory in (
     DATA,
@@ -135,9 +136,10 @@ SDSS_SQL = {
               <= 1.89*LOG10((g.sii_6717_flux+g.sii_6731_flux)/g.h_alpha_flux)+0.76
     """,
     "broad-line-agn": """
-        SELECT TOP 100 s.specObjID, s.ra, s.dec, s.z, s.plate, s.mjd, s.fiberID
+        SELECT TOP 100 s.specObjID, s.ra, s.dec, s.z, s.plate, s.mjd, s.fiberID,
+            s.class, s.subClass
         FROM SpecObj s
-        WHERE s.class IN ('GALAXY','QSO') AND s.subClass LIKE '%BROADLINE%'
+        WHERE s.class = 'QSO' AND s.subClass LIKE '%BROADLINE%'
           AND s.z BETWEEN 0.02 AND 0.50 AND s.zWarning = 0 AND s.plate < 3000
     """,
     "quenched": """
@@ -222,6 +224,14 @@ def query_sdss(category: str, sql: str):
             "mjd": int(row["mjd"]),
             "fiber": int(row["fiberID"]),
             "category": category,
+            **(
+                {
+                    "catalogClass": row["class"],
+                    "catalogSubclass": row["subClass"],
+                }
+                if "class" in row
+                else {}
+            ),
         }
         for row in rows
     ]
@@ -366,6 +376,31 @@ def build_sdss():
             future.result()
             if index % 50 == 0:
                 print(f"SDSS assets: {index}/{len(catalog)}")
+
+
+def rebuild_sdss_broadline():
+    """Replace the broad-line lesson with higher-purity QSO/BROADLINE spectra."""
+    path = DATA / "sdss-catalog.json"
+    catalog = json.loads(path.read_text())
+    replacement = query_sdss("broad-line-agn", SDSS_SQL["broad-line-agn"])
+    enrich_sdss_diagnostics(replacement)
+    first = next(
+        index
+        for index, row in enumerate(catalog)
+        if row["category"] == "broad-line-agn"
+    )
+    catalog = [
+        row for row in catalog if row["category"] != "broad-line-agn"
+    ]
+    catalog[first:first] = replacement
+    path.write_text(json.dumps(catalog, separators=(",", ":")))
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(cache_sdss, row) for row in replacement]
+        for index, future in enumerate(as_completed(futures), 1):
+            future.result()
+            if index % 20 == 0:
+                print(f"SDSS broad-line assets: {index}/{len(replacement)}")
+    print("SDSS broad-line sample: 100 QSO/BROADLINE spectra")
 
 
 DESI_FAMILIES = {
@@ -546,6 +581,28 @@ def legacy_survey_cutout(row, destination, force=False):
     if image.width < 300 or image.height < 300:
         raise RuntimeError("Legacy Surveys returned an undersized cutout")
     image.save(destination, quality=93)
+
+
+def dss_colour_cutout(row, destination):
+    """Cache an all-sky DSS2 colour fallback rendered by CDS HiPS2FITS."""
+    response = SESSION.get(
+        DSS_CUTOUT,
+        params={
+            "hips": "CDS/P/DSS2/color",
+            "width": 360,
+            "height": 360,
+            "fov": 0.025,
+            "projection": "TAN",
+            "coordsys": "icrs",
+            "ra": row["ra"],
+            "dec": row["dec"],
+            "format": "jpg",
+        },
+        timeout=120,
+    )
+    response.raise_for_status()
+    image = Image.open(io.BytesIO(response.content)).convert("RGB")
+    image.save(destination, quality=91)
 
 
 def cache_desi_stamp(row):
@@ -874,7 +931,36 @@ def cache_gama_spectrum(row):
 
 def cache_gama_stamp(row):
     destination = GAMA_STAMPS / f"{row['id']}.jpg"
-    legacy_survey_cutout(row, destination)
+    if destination.exists():
+        return row.get("imageSource", "Cached survey colour")
+    try:
+        legacy_survey_cutout(row, destination)
+        row["imageSource"] = "Legacy Surveys DR10"
+    except (requests.RequestException, RuntimeError, ValueError, OSError):
+        dss_colour_cutout(row, destination)
+        row["imageSource"] = "Digitized Sky Survey 2 colour"
+    return row["imageSource"]
+
+
+def rebuild_gama_stamps():
+    path = DATA / "gama-catalog.json"
+    catalog = json.loads(path.read_text())
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        futures = [
+            pool.submit(
+                dss_colour_cutout,
+                row,
+                GAMA_STAMPS / f"{row['id']}.jpg",
+            )
+            for row in catalog
+        ]
+        for index, future in enumerate(as_completed(futures), 1):
+            future.result()
+            if index % 50 == 0:
+                print(f"GAMA cached stamps: {index}/{len(catalog)}")
+    for row in catalog:
+        row["imageSource"] = "Digitized Sky Survey 2 colour"
+    path.write_text(json.dumps(catalog, separators=(",", ":")))
 
 
 def build_gama(download_stamps=True):
@@ -998,3 +1084,7 @@ if __name__ == "__main__":
         rebuild_legacy_stamps()
     if target == "sdss-diagnostics":
         build_sdss_diagnostics()
+    if target == "sdss-broadline":
+        rebuild_sdss_broadline()
+    if target == "gama-stamps":
+        rebuild_gama_stamps()
